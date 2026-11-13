@@ -1,0 +1,97 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /rooms/{code} {
+      function anonymous() {
+        return request.auth != null && request.auth.token.firebase.sign_in_provider == 'anonymous';
+      }
+
+      function validCode() {
+        return code.matches('^[A-HJ-NP-Z2-9]{8}$');
+      }
+
+      function validShape(data) {
+        return data.keys().hasAll(['scenario', 'roundId', 'roles', 'proposals', 'decision'])
+          && data.keys().hasOnly(['scenario', 'roundId', 'roles', 'proposals', 'decision'])
+          && data.scenario == 'cubesat-power-v1'
+          && data.roundId == 'integration-1';
+      }
+
+      function isNewRoom(data) {
+        return validShape(data)
+          && data.roles == {'pm': request.auth.uid, 'science': null, 'power': null, 'comms': null}
+          && data.proposals == {'science': null, 'power': null, 'comms': null}
+          && data.decision == null;
+      }
+
+      function changesOnly(field) {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly([field]);
+      }
+
+      function member() {
+        let roles = resource.data.roles;
+        return request.auth.uid in [roles.pm, roles.science, roles.power, roles.comms];
+      }
+
+      function joins(department) {
+        let before = resource.data.roles;
+        let after = request.resource.data.roles;
+        return before[department] == null
+          && after[department] == request.auth.uid
+          && after.diff(before).affectedKeys().hasOnly([department]);
+      }
+
+      function canJoin() {
+        return !member() && changesOnly('roles')
+          && (joins('science') || joins('power') || joins('comms'));
+      }
+
+      function validProposal(department, options) {
+        let before = resource.data.proposals;
+        let after = request.resource.data.proposals;
+        let proposal = after[department];
+        return resource.data.roles[department] == request.auth.uid
+          && after.diff(before).affectedKeys().hasOnly([department])
+          && proposal is map
+          && proposal.keys().hasOnly(['roundId', 'remedy'])
+          && proposal.roundId == resource.data.roundId
+          && proposal.remedy in options;
+      }
+
+      function canPropose() {
+        return changesOnly('proposals')
+          && (validProposal('science', ['stagger', 'basic'])
+            || validProposal('power', ['stagger', 'reinforced'])
+            || validProposal('comms', ['stagger', 'reinforced']));
+      }
+
+      function matchesProposal(department, remedy, fallback) {
+        let proposal = resource.data.proposals[department];
+        return (proposal == null && remedy == fallback)
+          || (proposal != null && proposal.roundId == resource.data.roundId && remedy == proposal.remedy);
+      }
+
+      function canConfirm() {
+        let decision = request.resource.data.decision;
+        let proposals = resource.data.proposals;
+        return resource.data.roles.pm == request.auth.uid
+          && changesOnly('decision')
+          && (proposals.science != null || proposals.power != null || proposals.comms != null)
+          && decision is map
+          && decision.keys().hasOnly(['department', 'roundId', 'remedy'])
+          && decision.roundId == resource.data.roundId
+          && ((decision.department == 'science' && matchesProposal('science', decision.remedy, 'stagger'))
+            || (decision.department == 'power' && matchesProposal('power', decision.remedy, 'reinforced'))
+            || (decision.department == 'comms' && matchesProposal('comms', decision.remedy, 'stagger')));
+      }
+
+      // The exact, unlisted room code is the invitation. Only claimed roles can submit.
+      allow get: if anonymous() && validCode();
+      allow create: if anonymous() && validCode() && isNewRoom(request.resource.data);
+      allow update: if anonymous() && validCode() && validShape(request.resource.data)
+        && resource.data.decision == null
+        && (canJoin() || canPropose() || canConfirm());
+    }
+  }
+}

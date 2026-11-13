@@ -1,5 +1,81 @@
 # Space Mission Design Game｜架構與流程草案
 
+## 原型啟動
+
+使用 Node.js 24 LTS（或 22.12 以上的 22.x）和 npm。
+
+```sh
+npm ci
+npm run dev
+```
+
+在瀏覽器開啟 Vite 顯示的網址，預設為 `http://localhost:5173`。單人模式可直接玩。選 EN 或繁中可切換文案。同一瀏覽器、同一網址會保留一個單人自動存檔，刷新後在大廳選「繼續任務」。開始新局會覆蓋該存檔。
+
+### 單人試玩
+
+立方衛星有 6 個遊戲週和 100 經費，首次試玩目標為 3–5 分鐘。從大廳查看簡報，再開始任務。
+
+| 路徑 | 操作 | 預期結果 |
+| --- | --- | --- |
+| 穩健通關 | 保留基本成像儀、基本供電、同時操作與標準發訊。依序完成可行性評估、定版、製造、整合及飛行審查。執行首次通聯。 | 第 4 週通過審查，地面收到 2 批可用資料。 |
+| 退回後補救 | 選高解析成像儀並保留基本供電及同時操作。完成整合並送審。執行「錯開操作排程」，重測後再次送審，在模擬傳回全部可用觀測。 | 第 4 週看到 13 W 需求、10 W 供應。修正花 1 週和 6 經費，重測花 1 週和 8 經費。第 6 週可通過審查，地面收到 3 批。 |
+| 到期未發射 | 保留基本酬載及供電，選提早發訊設定。完成整合並送審，退回後讓時間經過兩週。 | 首次發訊為 T+20 分鐘，低於本局要求的 30 分鐘。第 6 週以未發射結算。 |
+
+定版前可花 1 週和 5 經費分析功耗與操作時序。以高解析成像儀搭配基本供電做分析，然後在定版前改成錯開操作，可在第 5 週通過審查。高解析成像儀搭配加強供電和標準發訊時，首次通聯傳回全部資料可達成額外目標。基本成像儀若把通聯容量留給飛行診斷，則會以已發射、交付未達標結算。
+
+整合報告顯示模擬分離、展開裝置與首次發訊的時間戳。FRR 使用首次發訊時間減去分離時間，並與本局搭載介面要求比較。30 分鐘是遊戲設定。結算分別顯示設計預估、驗證證據、地面實收資料和決策紀錄。 [NASA《CubeSat 101》§6.9.1](https://science.nasa.gov/wp-content/uploads/2023/06/nasa_csli_cubesat_101_508.pdf#page=68)
+
+### 多人本機試玩
+
+準備 JDK 21 以上，先在一個終端機啟動 Auth 和 Firestore 模擬器，再在另一個終端機開發伺服器。首次執行會下載 Firestore 模擬器。
+
+```sh
+npm run emulators
+```
+
+```sh
+VITE_FIREBASE_EMULATORS=true npm run dev
+```
+
+1. 用兩個獨立瀏覽器設定檔開啟同一個 Vite 網址。一般視窗和一個無痕視窗也可以。
+2. 第一個視窗選「多人審查」並以 PM 身分建房。第二個視窗輸入八碼房間碼，選科學、電力或通訊組。
+3. 隊友送出一項提案後，可換方案再送一次。PM 畫面會同步提案。未送提案的部門會有遊戲代提，至少一位隊友送出提案後才可確認。
+4. PM 選一個提案並確認重測。各視窗都會收到相同判定，可各自切換語言。直接刷新會用原匿名身分回到房間。角色依瀏覽器設定檔保存，回大廳後可用原房間碼返回。
+
+這個原型每房一場整合審查。房間碼是邀請憑證。Firestore 禁止列舉房間，允許持碼匿名玩家讀取該房間。角色認領、提案和 PM 確認由 [Firestore 規則](firestore.rules)約束。確認交易使用回合 ID，寫入一次已選部門與方案 ID，之後各裝置用共用規則計算相同的整合證據與資源支出。
+
+### 驗證與部署
+
+```sh
+npm run typecheck
+npm run build
+npm test
+npx playwright install chromium
+npm run test:browser -- tests/single.spec.ts
+npm run test:team
+```
+
+`test:team` 會自動啟停模擬器。執行前先關閉手動啟動的模擬器，釋出 8080 和 9099。測試使用獨立 Chromium 瀏覽器身分，涵蓋 2 人與 4 人房、提案同步及修訂、Firestore 寫入權限、並發確認和刷新恢復。
+
+部署單人版時，把 `npm run build` 產生的 `dist/` 放到靜態主機。部署多人版時，使用團隊自己的 Firebase Spark 專案。新增 Web App，啟用 Authentication 的 Anonymous 登入，建立 Cloud Firestore 資料庫，將 [`.env.example`](.env.example) 複製為 `.env.local`，填入 Web App 的公開設定並保留 `VITE_FIREBASE_EMULATORS=false`。使用 Firebase Hosting 可執行下列指令。
+
+```sh
+npm run build
+npm exec -- firebase login
+npm exec -- firebase deploy --only firestore:rules,hosting --project YOUR_PROJECT_ID
+```
+
+部署後用兩台裝置各選一個角色，重跑建房到結算。雲端驗收需要專案存取權、啟用的匿名登入和 Firestore，及可連線的站點。 [Firebase 匿名登入](https://firebase.google.com/docs/auth/web/anonymous-auth) · [Firebase Hosting](https://firebase.google.com/docs/hosting/quickstart)
+
+### 故事與文案交接
+
+- 故事架構、任務分支和正式任務文案草稿放在 [`docs/story/`](docs/story/)。
+- 在 [繁中](src/i18n/zh-TW.ts)與[英文](src/i18n/en.ts)字典更新 `briefStory`、`briefDialogue`、各角色的 `*Brief`、階段說明和結局文案。保留 `{count}` 等變數供遊戲填入數值。
+- 在 [`src/missions/cubesat.ts`](src/missions/cubesat.ts) 調整初始配置、選項、成本、門檻和部門提案。變更多人提案 ID 或代提方案時，也需更新 [`firestore.rules`](firestore.rules) 並重跑 `npm run test:team`。
+- 入軌火箭、登月和團隊聲望目前有大廳入口。原型的實際操作範圍是立方衛星單人任務和多人整合審查。
+
+[官方挑戰資源](https://www.spaceappschallenge.org/2026/challenges/space-mission-design-game/?tab=resources)列出《CubeSat 101》。大廳地球影像來自 [NASA Earth Observatory《Blue Marble 2002》](https://science.nasa.gov/resource/blue-marble-2002/)。
+
 ## 團隊共識草案
 
 - 單人、回合制的任務管理遊戲。玩家扮演任務 PM，根據各組的提案做決策。
