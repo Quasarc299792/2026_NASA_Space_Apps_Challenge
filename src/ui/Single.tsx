@@ -2,18 +2,17 @@ import { useState } from 'react'
 import { Check, ChevronRight, CircleAlert, Flag, Radio, Satellite, Timer, Wallet } from 'lucide-react'
 import { cubeSat as mission } from '../missions/cubesat'
 import {
-  affordable, availableWeeks, canConfigure, currentEvidence, currentWork, forecast, passes, repairOptions,
+  affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, currentWork, forecast, passes, repairOptions,
   sameDesign, testDesign, workCost, type Action, type Design, type Entry, type FlightChoice, type Game, type Stage,
 } from '../game/mission'
 import type { Message, Translate } from '../i18n'
-import { ActionButton, Back, CostLabel, DesignTags, EvidenceReport, Heading, Metric, PowerReadout, RemedyPreview, remedyLabels } from './shared'
+import { ActionButton, Back, CostLabel, DesignTags, EvidenceReport, Heading, Metric, PowerReadout, RemedyPreview } from './shared'
 
 const stages: Stage[] = ['feasibility', 'design', 'build', 'integration', 'review', 'flight']
 const stageDetails = {
   feasibility: 'feasibilityDetail', design: 'designDetail', build: 'buildDetail',
   integration: 'integrationDetail', review: 'reviewDetail', flight: 'flightDetail',
 } as const
-const workLabels = { assess: 'assess', freeze: 'freeze', build: 'buildWork', integrate: 'integrate' } as const
 
 type Props = { game: Game; t: Translate; send: (action: Action) => void; back: () => void; restart: () => void }
 
@@ -84,11 +83,7 @@ function Config({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
 
 function Estimate({ game, t }: Pick<Props, 'game' | 't'>) {
   const estimate = forecast(game.design)
-  const remaining = {
-    feasibility: ['assess', 'freeze', 'build', 'integrate'], design: ['freeze', 'build', 'integrate'],
-    build: ['build', 'integrate'], integration: ['integrate'], review: [], flight: [], results: [],
-  } as const
-  const cost = remaining[game.stage].reduce((total, work) => total + workCost(game, work).credits, 0)
+  const cost = baselineRemainingCost(game)
   return <section className="panel estimate">
     <h2>{t('estimate')}</h2>
     <PowerReadout estimate={estimate} t={t} />
@@ -102,12 +97,9 @@ function logLabel(id: Entry['id']): Message {
     case 'approve': return 'logApprove'
     case 'return': return 'logReturn'
     case 'operate': return 'logOperate'
-    case 'build': return 'buildWork'
-    case 'stagger':
-    case 'basic':
-    case 'reinforced':
-    case 'compliant': return remedyLabels[id]
-    default: return id
+    case 'analysisConflict':
+    case 'analysisClear': return id
+    default: return mission.costs[id].label
   }
 }
 
@@ -137,6 +129,7 @@ function Flight({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
     <Options legend="ground" value={choice} choose={setChoice} t={t} options={[
       { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: mission.minimumBatches }) },
       { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: evidence.batches }) },
+      { id: 'diagnostics', name: 'flightDiagnostics', detail: t('flightDiagnosticsDetail', { count: mission.diagnosticBatches }) },
     ]} />
     <ActionButton onClick={() => send({ type: 'fly', choice })}>{t('runFlight')}</ActionButton>
   </section>
@@ -166,6 +159,7 @@ function Results({ game, t, back, restart }: Props) {
         <Estimate game={game} t={t} />
         <section className="panel"><h2>{t('delivery')}</h2>
           <p>{flight ? t('flightBatches', { count: flight.batches }) : t('noFlight')}</p>
+          {Boolean(flight?.diagnostics) && <p>{t('flightDiagnosticsSent')}</p>}
           {flight && <small>{t('firstTx')} · {t('timestamp', { count: flight.firstTx })}</small>}
         </section>
         <ActionButton onClick={restart}>{t('replay')}</ActionButton>
@@ -190,13 +184,13 @@ export function Single(props: Props) {
   const matchingAnalysis = game.analysis && sameDesign(game.analysis.design, game.design)
   return <>
     <Back t={t} onClick={back} />
-    <Heading eyebrow={`${t('cubesat')} / ${t('workbench')}`} title={t(game.stage)}>{t(stageDetails[game.stage])}</Heading>
+    <Heading eyebrow={`${t('cubesat')} / ${t('workbench')}`} title={t(game.stage)}>{t(game.returned ? 'returnedDetail' : stageDetails[game.stage])}</Heading>
     <div className="metrics">
       <Metric label={t('time')} value={<><Timer size={19} aria-hidden />{t('weeks', { count: availableWeeks(game) })}</>}
         detail={t('weekOf', { week: game.week, deadline: mission.deadline })} />
       <Metric label={t('budget')} value={<><Wallet size={19} aria-hidden />{t('credits', { count: game.credits })}</>}
         detail={t('budgetOf', { count: mission.budget })} />
-      <Metric label={t('progress')} value={checks ? `${totalPass} / 3` : t(testDesign(game.design).dataPass ? 'estimateOnTrack' : 'estimateAtRisk')}
+      <Metric label={t('progress')} value={checks ? `${totalPass} / 3` : t(passes(testDesign(game.design)) ? 'estimateOnTrack' : 'estimateAtRisk')}
         detail={checks ? t('report') : t('gates', { gate: game.gate })} />
     </div>
     <ol className="stage-track">
@@ -218,12 +212,12 @@ export function Single(props: Props) {
         {game.stage === 'flight' && <Flight game={game} t={t} send={send} />}
         {game.returned && <section className="panel repair">
           <div className="row"><h2>{t('returned')}</h2><CircleAlert size={20} className="bad" aria-hidden /></div>
-          <p>{t('returnedDetail')} {t('retestAdditional', retest)}</p>
+          <p>{t('retestAdditional', retest)}</p>
           {!repairFits && <p className="notice">{t('noRepairTime')}</p>}
           {repairs.map(remedy => {
             const fix = mission.costs[remedy]
             return <div className="repair-option" key={remedy}>
-              <div><strong>{t(remedyLabels[remedy])}</strong><RemedyPreview design={game.design} remedy={remedy} t={t} /></div>
+              <div><strong>{t(fix.label)}</strong><RemedyPreview design={game.design} remedy={remedy} t={t} /></div>
               <button className="button secondary" disabled={!affordable(game, fix)} onClick={() => send({ type: 'repair', remedy })}>
                 {t('repair')} <CostLabel t={t} {...fix} />
               </button>
@@ -232,7 +226,7 @@ export function Single(props: Props) {
         </section>}
         {work && cost && <div className="action-row">
           <ActionButton disabled={!affordable(game, cost)} onClick={() => send({ type: 'work' })}>
-            {t(work === 'integrate' && game.evidence ? 'retest' : workLabels[work])} <CostLabel t={t} {...cost} />
+            {t(work === 'integrate' && game.evidence ? 'retest' : mission.costs[work].label)} <CostLabel t={t} {...cost} />
           </ActionButton>
           {editable && <button className="button secondary" disabled={Boolean(matchingAnalysis) || !affordable(game, mission.costs.analyze)}
             onClick={() => send({ type: 'analyze' })}>{t('analyze')} <CostLabel t={t} {...mission.costs.analyze} /></button>}

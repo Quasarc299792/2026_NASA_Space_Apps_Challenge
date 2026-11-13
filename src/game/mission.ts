@@ -7,8 +7,8 @@ export type Design = {
   radio: keyof typeof mission.radios
 }
 
-export const initialDesign: Design = { payload: 'basic', supply: 'standard', schedule: 'overlap', radio: 'compliant' }
-export const reviewDesign: Design = { ...initialDesign, payload: 'advanced' }
+export const initialDesign: Design = mission.initialDesign
+export const reviewDesign: Design = mission.reviewDesign
 export const remedies = ['stagger', 'basic', 'reinforced', 'compliant'] as const
 export type Remedy = typeof remedies[number]
 export const multiplayerRemedies = ['stagger', 'basic', 'reinforced'] as const
@@ -28,6 +28,7 @@ export function forecast(design: Design) {
   const capacity = Math.min(mission.groundCapacity, radio.groundCapacity)
   return {
     payloadWatts: payload.watts, peak, available: supply.watts, deficit: Math.max(0, peak - supply.watts),
+    contactCapacity: capacity,
     batches: Math.max(0, Math.min(payload.batches - schedule.batchLoss, capacity)),
   }
 }
@@ -42,11 +43,12 @@ export function testDesign(design: Design) {
     elapsed: firstTx - mission.ditl.separationMinutes,
     threshold: mission.ditl.minQuietMinutes,
   }
+  const testedBatches = designForecast.deficit ? 0 : designForecast.batches
   return {
-    design, ...designForecast, ditl,
+    design, ...designForecast, ditl, testedBatches,
     powerPass: designForecast.deficit === 0,
     ditlPass: ditl.elapsed >= ditl.threshold,
-    dataPass: designForecast.deficit === 0 && designForecast.batches >= mission.minimumBatches,
+    dataPass: testedBatches >= mission.minimumBatches,
   }
 }
 
@@ -75,12 +77,13 @@ export function resolveTeamReview(remedy: MultiplayerRemedy) {
 }
 
 const stageWork = { feasibility: 'assess', design: 'freeze', build: 'build', integration: 'integrate' } as const
+const workOrder = Object.values(stageWork)
 type Work = keyof typeof mission.costs
 type LogId = Work | 'return' | 'approve' | 'operate' | 'analysisClear' | 'analysisConflict'
 export type Entry = { id: LogId; week: number; cost: number; design: Design; report?: Evidence }
 type Analysis = { design: Design; forecast: ReturnType<typeof forecast> }
-export type FlightChoice = 'priority' | 'extra'
-export type Flight = { choice: FlightChoice; batches: number; stretch: boolean; firstTx: number }
+export type FlightChoice = 'priority' | 'extra' | 'diagnostics'
+export type Flight = { choice: FlightChoice; batches: number; diagnostics?: number; stretch: boolean; firstTx: number }
 type Stop = 'deadline' | 'funds' | 'cancelled'
 
 export type Game = {
@@ -133,6 +136,12 @@ export function currentWork(game: Game) {
   return game.stage in stageWork ? stageWork[game.stage as keyof typeof stageWork] : null
 }
 
+export function baselineRemainingCost(game: Game) {
+  const work = currentWork(game)
+  if (!work) return 0
+  return workOrder.slice(workOrder.indexOf(work)).reduce((total, task) => total + workCost(game, task).credits, 0)
+}
+
 export function canConfigure(game: Game) {
   return game.stage === 'feasibility' || game.stage === 'design'
 }
@@ -173,8 +182,10 @@ function checkResources(game: Game): Game {
   const work = currentWork(game)
   if (work && game.stage !== 'design' && game.credits < workCost(game, work).credits) return stop(game, 'funds')
   if (game.stage === 'design') {
-    const cheapest = workCost({ ...game, design: initialDesign }, 'freeze')
-    if (game.credits < cheapest.credits) return stop(game, 'funds')
+    const cheapest = mission.costs.freeze.credits
+      + Math.min(...Object.values(mission.payloads).map(option => option.cost))
+      + Math.min(...Object.values(mission.supplies).map(option => option.cost))
+    if (game.credits < cheapest) return stop(game, 'funds')
   }
   return game
 }
@@ -241,8 +252,11 @@ export function runMission(game: Game, action: Action): Game {
     case 'fly': {
       const evidence = currentEvidence(game)
       if (game.stage !== 'flight' || !evidence || !passes(evidence)) return game
-      const batches = action.choice === 'priority' ? Math.min(evidence.batches, mission.minimumBatches) : evidence.batches
-      const flight = { choice: action.choice, batches, stretch: batches >= mission.stretchBatches, firstTx: evidence.ditl.firstTx }
+      const capacity = evidence.contactCapacity ?? forecast(game.design).contactCapacity
+      const diagnostics = action.choice === 'diagnostics' ? Math.min(capacity, mission.diagnosticBatches) : 0
+      const requested = action.choice === 'priority' ? mission.minimumBatches : evidence.batches
+      const batches = Math.min(requested, evidence.batches, capacity - diagnostics)
+      const flight = { choice: action.choice, batches, diagnostics, stretch: batches >= mission.stretchBatches, firstTx: evidence.ditl.firstTx }
       return record({ ...game, stage: 'results', flight }, 'operate')
     }
   }

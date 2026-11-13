@@ -2,11 +2,7 @@ import { ArrowLeft, ArrowRight, Check, CircleAlert, Satellite } from 'lucide-rea
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import { cubeSat } from '../missions/cubesat'
 import { applyRemedy, forecast, testDesign, type Design, type Remedy } from '../game/mission'
-import type { Message, Translate } from '../i18n'
-
-export const remedyLabels = {
-  stagger: 'remedyStagger', basic: 'remedyBasic', reinforced: 'remedyReinforced', compliant: 'remedyCompliant',
-} as const satisfies Record<Remedy, Message>
+import type { Translate } from '../i18n'
 
 export function ActionButton({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button type="button" className="button primary" {...props}>{children}<ArrowRight size={17} aria-hidden /></button>
@@ -78,7 +74,7 @@ export function EvidenceReport({ evidence, t, outdated }: {
     </div>
     <div className="check">
       <div className="row"><h3>{t('dataCheck')}</h3><Status pass={evidence.dataPass} t={t} /></div>
-      <p>{t('dataThreshold', { count: evidence.powerPass ? evidence.batches : 0, minimum: cubeSat.minimumBatches })}</p>
+      <p>{t('dataThreshold', { count: evidence.testedBatches ?? (evidence.powerPass ? evidence.batches : 0), minimum: cubeSat.minimumBatches })}</p>
     </div>
     <div className="check">
       <div className="row"><h3>{t('ditl')}</h3><Status pass={evidence.ditlPass} t={t} /></div>

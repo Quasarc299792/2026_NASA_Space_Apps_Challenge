@@ -184,3 +184,19 @@ footer { display: flex; align-items: center; gap: 7px; border-top: 1px solid var
   .brand { font-size: .89rem; }
   .language svg { display: none; }
 }
+
+.team-form, .team-form form, .proposal-panel, .proposal-list { display: grid; gap: 10px; }
+.team-form { justify-items: start; }
+.team-form form { width: 100%; border-top: 1px solid var(--line); padding-top: 12px; }
+.team-form label { color: var(--muted); font-size: .85rem; }
+.team-form input { width: 12ch; max-width: 100%; background: var(--bg); color: var(--lime); font: 1rem var(--mono); letter-spacing: .07em; min-height: 43px; border: 1px solid #546451; border-radius: 6px; padding: 8px; }
+.proposal-panel > .button { justify-self: start; }
+.proposal-row { border-top: 1px solid var(--line); padding-top: 9px; }
+.proposal-detail { flex: 1; display: grid; gap: 4px; }
+.proposal-detail > strong { color: var(--lime); }
+.proposal-detail .row { flex-wrap: wrap; }
+.result-banner { display: flex; align-items: start; gap: 13px; background: #252f21; border-color: #546746; }
+.result-banner svg, .icon-title svg { color: var(--lime); }
+.icon-title { display: flex; align-items: center; gap: 7px; }
+.role-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 7px; }
+.role-list li { display: flex; justify-content: space-between; gap: 7px; font-size: .89rem; }

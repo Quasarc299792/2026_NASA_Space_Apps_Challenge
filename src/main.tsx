@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useReducer, useState } from 'react'
+import { lazy, StrictMode, Suspense, useEffect, useMemo, useReducer, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ArrowRight, Clock3, Globe2, LockKeyhole, Moon, Orbit, Radio, Rocket, Satellite, UsersRound } from 'lucide-react'
 import '@fontsource-variable/inter'
@@ -7,20 +7,23 @@ import '@fontsource/ibm-plex-mono/400.css'
 import './style.css'
 import earth from './assets/blue-marble.jpg'
 import { type Action, type Game, newGame, runMission } from './game/mission'
-import { readGame, writeGame, writeLocal } from './game/storage'
+import { readGame, readLocal, writeGame, writeLocal } from './game/storage'
 import { languageKey, preferredLanguage, translator, type Language, type Translate } from './i18n'
 import { cubeSat, nextMissions } from './missions/cubesat'
 import { Brief, Single } from './ui/Single'
 import { ActionButton } from './ui/shared'
+import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 
-type Screen = 'lobby' | 'brief' | 'single'
+const Team = lazy(() => import('./ui/Team'))
+
+type Screen = 'lobby' | 'brief' | 'single' | 'team'
 type SessionAction = Action | { type: 'new' }
 
 function session(game: Game | null, action: SessionAction) {
   return action.type === 'new' ? newGame() : game && runMission(game, action)
 }
 
-function Lobby({ t, saved, open, resume }: { t: Translate; saved: boolean; open: () => void; resume: () => void }) {
+function Lobby({ t, saved, open, resume, team }: { t: Translate; saved: boolean; open: () => void; resume: () => void; team: () => void }) {
   return <>
     <section className="hero">
       <div className="earth-art" aria-hidden>
@@ -58,17 +61,18 @@ function Lobby({ t, saved, open, resume }: { t: Translate; saved: boolean; open:
     <section className="panel team-entry">
       <div className="tile-icon"><UsersRound size={21} aria-hidden /></div>
       <div><h2>{t('multiplayer')}</h2><p>{t('teamLobbyDetail')} · {t('teamSize')}</p></div>
-      <small>{t('roomDisabled')}</small>
+      {multiplayerAvailable ? <button className="button secondary" onClick={team}>{t('multiplayer')} <ArrowRight size={17} aria-hidden /></button>
+        : <small>{t('roomDisabled')}</small>}
     </section>
   </>
 }
 
 function App() {
   const [language, setLanguage] = useState<Language>(preferredLanguage)
-  const [screen, setScreen] = useState<Screen>('lobby')
+  const [screen, setScreen] = useState<Screen>(() => multiplayerAvailable && readLocal(activeRoomKey) ? 'team' : 'lobby')
   const [game, dispatch] = useReducer(session, null, readGame)
   const [saved, setSaved] = useState(true)
-  const t = translator(language)
+  const t = useMemo(() => translator(language), [language])
 
   useEffect(() => {
     document.documentElement.lang = language
@@ -87,7 +91,10 @@ function App() {
     setScreen('single')
   }
 
-  const back = () => setScreen('lobby')
+  function back() {
+    if (screen === 'team') writeLocal(activeRoomKey, null)
+    setScreen('lobby')
+  }
 
   return <>
     <header className="topbar">
@@ -102,9 +109,10 @@ function App() {
     </header>
     <main className="shell">
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
-      {screen === 'lobby' && <Lobby t={t} saved={Boolean(game)} open={() => setScreen('brief')} resume={() => setScreen('single')} />}
+      {screen === 'lobby' && <Lobby t={t} saved={Boolean(game)} open={() => setScreen('brief')} resume={() => setScreen('single')} team={() => setScreen('team')} />}
       {screen === 'brief' && <Brief t={t} saved={Boolean(game)} back={back} begin={begin} />}
       {screen === 'single' && game && <Single game={game} send={dispatch} back={back} restart={begin} t={t} />}
+      {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
       <footer><Radio size={15} aria-hidden /> {t('challenge')}</footer>
     </main>
   </>

@@ -64,3 +64,19 @@ test('the launch window closes when failed evidence is left unresolved', async (
   await expect(page.getByText('The launch slot closed before flight approval.')).toBeVisible()
   await expect(page.getByText('No in-orbit result')).toBeVisible()
 })
+
+test('Traditional Chinese mobile run separates tested data from actual delivery', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await page.getByRole('button', { name: '繁中' }).click()
+  for (const label of ['查看任務簡報', '開始任務', '完成可行性評估', '確認設計定版', '製造並驗證子系統', '執行整合測試', '送交飛行審查']) {
+    await page.getByRole('button', { name: new RegExp(label) }).click()
+  }
+  await page.getByRole('radio', { name: /優先下傳飛行診斷/ }).check()
+  await page.getByRole('button', { name: '執行首次通聯' }).click()
+  await expect(page.getByRole('heading', { name: '已發射・交付未達標' })).toBeVisible()
+  await expect(page.getByText('可用 2 批／需 2 批')).toBeVisible()
+  await expect(page.getByText('已收到 0 批可用資料').first()).toBeVisible()
+  await expect(page.getByText('已下傳飛行診斷')).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+})
