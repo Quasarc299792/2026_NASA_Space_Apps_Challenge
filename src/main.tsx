@@ -1,17 +1,17 @@
 import { lazy, StrictMode, Suspense, useEffect, useMemo, useReducer, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ArrowRight, Clock3, Globe2, LockKeyhole, Moon, Orbit, Radio, Rocket, Satellite, UsersRound } from 'lucide-react'
+import { ArrowRight, Orbit } from 'lucide-react'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/bricolage-grotesque'
 import '@fontsource/ibm-plex-mono/400.css'
 import './style.css'
-import earth from './assets/blue-marble.jpg'
+import spacecraft from './assets/tempest-d.jpg'
 import { type Action, type Game, newGame, runMission } from './game/mission'
 import { readGame, readLocal, writeGame, writeLocal } from './game/storage'
 import { languageKey, preferredLanguage, translator, type Language, type Translate } from './i18n'
 import { cubeSat, nextMissions } from './missions/cubesat'
 import { Brief, Single } from './ui/Single'
-import { ActionButton } from './ui/shared'
+import { ActionButton, Disclosure } from './ui/shared'
 import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 
 const Team = lazy(() => import('./ui/Team'))
@@ -25,45 +25,36 @@ function session(game: Game | null, action: SessionAction) {
 
 function Lobby({ t, saved, open, resume, team }: { t: Translate; saved: boolean; open: () => void; resume: () => void; team: () => void }) {
   return <>
-    <section className="hero">
-      <div className="earth-art" aria-hidden>
-        <div className="orbit orbit-outer" /><div className="orbit orbit-inner" />
-        <img src={earth} alt="" fetchPriority="high" />
-        <Satellite className="hero-satellite" size={44} strokeWidth={1.15} />
-      </div>
-      <div className="hero-copy">
-        <span className="eyebrow"><i className="signal" /> {t('challenge')}</span>
+    <section className="lobby">
+      <div className="lobby-copy">
+        <p className="eyebrow">{t('challenge')}</p>
         <h1>{t('heroTitle')}</h1>
-        <p>{t('heroDetail')}</p>
+        <p className="lobby-intro">{t('heroDetail')}</p>
+        <p className="lobby-duration">{t('duration', { minutes: cubeSat.playMinutes })} · {t('single')}</p>
         <div className="action-row">
           <ActionButton onClick={saved ? resume : open}>{t(saved ? 'continue' : 'briefAction')}</ActionButton>
-          {saved && <button className="button secondary" onClick={open}>{t('newMission')}</button>}
+          {saved && <button className="text-button" onClick={open}>{t('newMission')}</button>}
         </div>
       </div>
-      <a className="art-credit" href="https://science.nasa.gov/resource/blue-marble-2002/" target="_blank" rel="noreferrer">{t('artCredit')}</a>
+      <figure className="lobby-photo">
+        <img src={spacecraft} alt={t('photoCaption')} width={1100} height={825} fetchPriority="high" />
+        <figcaption>
+          <span>{t('photoCaption')}</span>
+          <a href="https://science.nasa.gov/photojournal/tempest-d-spacecraft/" target="_blank" rel="noreferrer">{t('photoCredit')}</a>
+        </figcaption>
+      </figure>
     </section>
-    <section className="mission-list" aria-labelledby="mission-selection">
-      <div className="row list-heading"><h2 id="mission-selection">{t('missionSelect')}</h2><small>{t('reputation')} · {t('planned')}</small></div>
-      <div className="mission-cards">
-        <button className="mission-card available" onClick={open}>
-          <Satellite size={23} aria-hidden /><span><strong>{t('cubesat')}</strong>
-            <small><Clock3 size={13} aria-hidden /> {t('duration', { minutes: cubeSat.playMinutes })} · {t('single')}</small>
-          </span><ArrowRight size={18} aria-hidden />
-        </button>
-        {nextMissions.map(({ id, title }) => {
-          const Icon = id === 'orbital-launch' ? Rocket : Moon
-          return <div className="mission-card planned" key={id}>
-            <Icon size={23} aria-hidden /><span><strong>{t(title)}</strong><small>{t('planned')}</small></span><LockKeyhole size={15} aria-hidden />
-          </div>
-        })}
-      </div>
-    </section>
-    <section className="panel team-entry">
-      <div className="tile-icon"><UsersRound size={21} aria-hidden /></div>
-      <div><h2>{t('multiplayer')}</h2><p>{t('teamLobbyDetail')} · {t('teamSize')}</p></div>
-      {multiplayerAvailable ? <button className="button secondary" onClick={team}>{t('multiplayer')} <ArrowRight size={17} aria-hidden /></button>
-        : <small>{t('roomDisabled')}</small>}
-    </section>
+    <div className="lobby-links">
+      {multiplayerAvailable ? <button className="lobby-team" onClick={team}>
+        <span>{t('multiplayer')}</span><small>{t('teamSize')}</small><ArrowRight size={17} aria-hidden />
+      </button> : <Disclosure label={t('multiplayer')} value={t('teamSize')}><p>{t('roomDisabled')}</p></Disclosure>}
+      <Disclosure label={t('availableMissions')}>
+        <dl className="fact-list">
+          {nextMissions.map(({ id, title }) => <div key={id}><dt>{t(title)}</dt><dd>{t('planned')}</dd></div>)}
+          <div><dt>{t('reputation')}</dt><dd>{t('planned')}</dd></div>
+        </dl>
+      </Disclosure>
+    </div>
   </>
 }
 
@@ -101,7 +92,6 @@ function App() {
       <div className="topbar-inner">
         <button className="brand" onClick={back} aria-label={t('lobby')}><Orbit size={25} aria-hidden /><span>{t('app')}</span></button>
         <div className="language">
-          <Globe2 size={16} aria-hidden />
           <button aria-pressed={language === 'en'} lang="en" onClick={() => setLanguage('en')}>EN</button>
           <button aria-pressed={language === 'zh-TW'} lang="zh-TW" onClick={() => setLanguage('zh-TW')}>繁中</button>
         </div>
@@ -113,7 +103,6 @@ function App() {
       {screen === 'brief' && <Brief t={t} saved={Boolean(game)} back={back} begin={begin} />}
       {screen === 'single' && game && <Single game={game} send={dispatch} back={back} restart={begin} t={t} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
-      <footer><Radio size={15} aria-hidden /> {t('challenge')}</footer>
     </main>
   </>
 }
