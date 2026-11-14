@@ -126,3 +126,6 @@ export function drawFromPool<T>(seed: number, drawId: string, pool: readonly T[]
 export function percent(risk: number) {
   return Math.round(risk * 100)
 }
+
+// At flight review, a risk above this needs the player's signature to fly with it.
+export const reviewRiskThreshold = 0.05
