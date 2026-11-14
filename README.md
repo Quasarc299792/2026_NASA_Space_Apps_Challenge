@@ -74,7 +74,7 @@ npm exec -- firebase deploy --only firestore:rules,hosting --project YOUR_PROJEC
 - 在 [`src/missions/cubesat.ts`](src/missions/cubesat.ts) 調整初始配置、選項、成本、門檻和部門提案。變更多人提案 ID 或代提方案時，也需更新 [`firestore.rules`](firestore.rules) 並重跑 `npm run test:team`。
 - 入軌火箭、登月和團隊聲望目前有大廳入口。原型的實際操作範圍是立方衛星單人任務和多人整合審查。
 
-[官方挑戰資源](https://www.spaceappschallenge.org/2026/challenges/space-mission-design-game/?tab=resources)列出《CubeSat 101》。大廳照片為地球觀測立方衛星 [TEMPEST-D](https://science.nasa.gov/photojournal/tempest-d-spacecraft/)，來源為 NASA／JPL-Caltech／Blue Canyon Technologies。
+[官方挑戰資源](https://www.spaceappschallenge.org/2026/challenges/space-mission-design-game/?tab=resources)列出《CubeSat 101》。大廳使用立方衛星的像素插畫。
 
 ## 團隊共識草案
 
