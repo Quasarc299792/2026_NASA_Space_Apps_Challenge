@@ -17,14 +17,21 @@ export type Cost = { weeks: number; credits: number }
 export type Stage = 'feasibility' | 'design' | 'build' | 'integration' | 'review' | 'flight' | 'results'
 export type Gate = 'MDR' | 'PDR' | 'CDR' | 'FRR'
 
+export function powerTimeline(design: Design) {
+  const bus = mission.busWatts
+  const imaging = bus + mission.payloads[design.payload].watts
+  const downlink = bus + mission.downlinkWatts
+  return design.schedule === 'overlap'
+    ? [{ id: 'imaging', watts: imaging }, { id: 'overlap', watts: imaging + mission.downlinkWatts }] as const
+    : [{ id: 'imaging', watts: imaging }, { id: 'handoff', watts: bus }, { id: 'downlink', watts: downlink }] as const
+}
+
 export function forecast(design: Design) {
   const payload = mission.payloads[design.payload]
   const supply = mission.supplies[design.supply]
   const schedule = mission.schedules[design.schedule]
   const radio = mission.radios[design.radio]
-  const combined = mission.busWatts + payload.watts + mission.downlinkWatts
-  const separate = mission.busWatts + Math.max(payload.watts, mission.downlinkWatts)
-  const peak = design.schedule === 'overlap' ? combined : separate
+  const peak = Math.max(...powerTimeline(design).map(segment => segment.watts))
   const capacity = Math.min(mission.groundCapacity, radio.groundCapacity)
   return {
     payloadWatts: payload.watts, peak, available: supply.watts, deficit: Math.max(0, peak - supply.watts),
@@ -83,8 +90,22 @@ type LogId = Work | 'return' | 'approve' | 'operate' | 'analysisClear' | 'analys
 export type Entry = { id: LogId; week: number; cost: number; design: Design; report?: Evidence }
 type Analysis = { design: Design; forecast: ReturnType<typeof forecast> }
 export type FlightChoice = 'priority' | 'extra' | 'diagnostics'
-export type Flight = { choice: FlightChoice; batches: number; diagnostics?: number; stretch: boolean; firstTx: number }
+type Flight = { choice: FlightChoice; batches: number; diagnostics?: number; archived?: number; stretch: boolean; firstTx: number }
+type Contact = { choice: FlightChoice; next: number; accepted: number; diagnosticsPending: boolean }
 type Stop = 'deadline' | 'funds' | 'cancelled'
+export type LabPlayback = { kind: 'assembly' | 'integration'; step: number }
+const assemblyOrder = ['science', 'power', 'comms'] as const
+export type BenchLead = 'science' | 'power'
+export type TestFocus = 'imaging' | 'downlink'
+export type ConfigStep = 'payload' | 'supply' | 'schedule' | 'radio'
+
+export function benchSequence(lead: BenchLead = 'science') {
+  return lead === 'power' ? ['power', 'science', 'comms'] as const : assemblyOrder
+}
+
+export function scopeSegment(timeline: ReturnType<typeof powerTimeline>, focus: TestFocus = 'downlink') {
+  return focus === 'imaging' ? timeline[0] : timeline[timeline.length - 1]
+}
 
 export type Game = {
   missionId: typeof mission.id
@@ -100,13 +121,24 @@ export type Game = {
   stop: Stop | null
   returned: boolean
   log: Entry[]
+  playback?: LabPlayback
+  benchLead?: BenchLead
+  testFocus?: TestFocus
+  contact?: Contact
+  configStep?: ConfigStep
 }
 
 export type Action =
   | { type: 'configure'; design: Design }
+  | { type: 'configStep'; step: ConfigStep }
   | { type: 'work' | 'analyze' | 'review' | 'wait' | 'cancel' }
   | { type: 'repair'; remedy: Remedy }
   | { type: 'fly'; choice: FlightChoice }
+  | { type: 'runLab'; benchLead?: BenchLead; testFocus?: TestFocus }
+  | { type: 'advanceLab'; playback: LabPlayback; skip?: boolean }
+  | { type: 'startContact'; choice: FlightChoice }
+  | { type: 'checkDiagnostics' }
+  | { type: 'checkBatch'; batch: number; deliver: boolean }
 
 export function newGame(): Game {
   return {
@@ -208,13 +240,51 @@ function doWork(game: Game): Game {
   }
 }
 
+export function planContact(evidence: ReturnType<typeof testDesign>, choice: FlightChoice) {
+  const capacity = evidence.contactCapacity ?? forecast(evidence.design).contactCapacity
+  const diagnostics = choice === 'diagnostics' ? Math.min(capacity, mission.diagnosticBatches) : 0
+  const requested = choice === 'priority' ? mission.minimumBatches : evidence.batches
+  return { batches: Math.min(requested, evidence.batches, capacity - diagnostics), diagnostics }
+}
+
+function finishContact(game: Game, evidence: Evidence, choice: FlightChoice, batches: number): Game {
+  const { batches: received, diagnostics } = planContact(evidence, choice)
+  const flight = { choice, batches, diagnostics, archived: received - batches, stretch: batches >= mission.stretchBatches, firstTx: evidence.ditl.firstTx }
+  const { contact: _finished, ...next } = game
+  return record({ ...next, stage: 'results', flight }, 'operate')
+}
+
 export function runMission(game: Game, action: Action): Game {
+  if (game.playback) {
+    if (action.type !== 'advanceLab' || action.playback !== game.playback) return game
+    const { kind, step } = game.playback
+    const length = kind === 'assembly' ? benchSequence(game.benchLead).length : powerTimeline(game.design).length
+    if (!action.skip && step + 1 < length) return { ...game, playback: { kind, step: step + 1 } }
+    const { playback: _completed, ...next } = game
+    const evidence = currentEvidence(next)
+    return kind === 'integration' && evidence && !passes(evidence) ? runMission(next, { type: 'review' }) : next
+  }
   if (game.stage === 'results') return game
   switch (action.type) {
     case 'configure':
       return canConfigure(game) && !sameDesign(game.design, action.design) ? { ...game, design: action.design } : game
+    case 'configStep': {
+      const valid = game.stage === 'feasibility' ? action.step === 'payload' || action.step === 'supply'
+        : game.stage === 'design' && (action.step === 'schedule' || action.step === 'radio')
+      return valid ? { ...game, configStep: action.step } : game
+    }
     case 'work':
       return doWork(game)
+    case 'runLab': {
+      if (game.stage !== 'build' && game.stage !== 'integration') return game
+      const next = doWork(game)
+      if (next === game) return game
+      return game.stage === 'build'
+        ? { ...next, benchLead: action.benchLead, playback: { kind: 'assembly', step: 0 } }
+        : { ...next, testFocus: action.testFocus, playback: { kind: 'integration', step: 0 } }
+    }
+    case 'advanceLab':
+      return game
     case 'analyze': {
       if (!canConfigure(game) || (game.analysis && sameDesign(game.analysis.design, game.design))
         || !affordable(game, mission.costs.analyze)) return game
@@ -249,15 +319,30 @@ export function runMission(game: Game, action: Action): Game {
         : checkResources(spend(game, 'wait'))
     case 'cancel':
       return game.stage === 'flight' ? game : stop(game, 'cancelled')
-    case 'fly': {
+    case 'fly':
+    case 'startContact': {
       const evidence = currentEvidence(game)
-      if (game.stage !== 'flight' || !evidence || !passes(evidence)) return game
-      const capacity = evidence.contactCapacity ?? forecast(game.design).contactCapacity
-      const diagnostics = action.choice === 'diagnostics' ? Math.min(capacity, mission.diagnosticBatches) : 0
-      const requested = action.choice === 'priority' ? mission.minimumBatches : evidence.batches
-      const batches = Math.min(requested, evidence.batches, capacity - diagnostics)
-      const flight = { choice: action.choice, batches, diagnostics, stretch: batches >= mission.stretchBatches, firstTx: evidence.ditl.firstTx }
-      return record({ ...game, stage: 'results', flight }, 'operate')
+      if (game.stage !== 'flight' || game.contact || !evidence || !passes(evidence)) return game
+      const { batches, diagnostics } = planContact(evidence, action.choice)
+      if (action.type === 'fly' || (!batches && !diagnostics)) return finishContact(game, evidence, action.choice, batches)
+      return { ...game, contact: { choice: action.choice, next: 0, accepted: 0, diagnosticsPending: diagnostics > 0 } }
+    }
+    case 'checkDiagnostics': {
+      const { contact } = game
+      const evidence = currentEvidence(game)
+      if (game.stage !== 'flight' || !evidence || !contact?.diagnosticsPending) return game
+      return planContact(evidence, contact.choice).batches
+        ? { ...game, contact: { ...contact, diagnosticsPending: false } }
+        : finishContact(game, evidence, contact.choice, 0)
+    }
+    case 'checkBatch': {
+      const { contact } = game
+      const evidence = currentEvidence(game)
+      if (game.stage !== 'flight' || !evidence || !contact || contact.diagnosticsPending || action.batch !== contact.next) return game
+      const { batches } = planContact(evidence, contact.choice)
+      const accepted = contact.accepted + Number(action.deliver)
+      const next = contact.next + 1
+      return next === batches ? finishContact(game, evidence, contact.choice, accepted) : { ...game, contact: { ...contact, next, accepted } }
     }
   }
 }

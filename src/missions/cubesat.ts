@@ -4,6 +4,7 @@ export const cubeSat = {
   brief: 'briefStory',
   deadline: 6,
   budget: 100,
+  dollarsPerCredit: 10_000,
   playMinutes: '3–5',
   initialDesign: { payload: 'basic', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
   reviewDesign: { payload: 'advanced', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
