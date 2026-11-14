@@ -5,7 +5,7 @@ import '@fontsource-variable/inter'
 import '@fontsource-variable/bricolage-grotesque'
 import '@fontsource/ibm-plex-mono/400.css'
 import './style.css'
-import spacecraft from './assets/tempest-d.jpg'
+import spacecraft from './assets/cubesat-pixel.png'
 import { type Action, type Game, newGame, runMission } from './game/mission'
 import { readGame, readLocal, writeGame, writeLocal } from './game/storage'
 import { languageKey, preferredLanguage, translator, type Language, type Translate } from './i18n'
@@ -39,12 +39,9 @@ function Lobby({ t, game, open, resume, team }: { t: Translate; game: Game | nul
           {finished && <button className="text-button" onClick={resume}>{t('previousResults')}</button>}
         </div>
       </div>
-      <figure className="lobby-photo">
-        <img src={spacecraft} alt={t('photoCaption')} width={1100} height={825} fetchPriority="high" />
-        <figcaption>
-          <span>{t('photoCaption')}</span>
-          <a href="https://science.nasa.gov/photojournal/tempest-d-spacecraft/" target="_blank" rel="noreferrer">{t('photoCredit')}</a>
-        </figcaption>
+      <figure className="lobby-art">
+        <img src={spacecraft} alt={t('lobbyArtAlt')} width={128} height={80} fetchPriority="high" />
+        <figcaption>{t('lobbyArtCaption')}</figcaption>
       </figure>
     </section>
     <div className="lobby-links">

@@ -184,14 +184,17 @@ function Flight({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
     </>
     return <>
       <ReportCard speaker="ground" t={t}>
-        <p>{t(next < mission.minimumBatches ? 'groundRequiredBatch' : 'groundExtraBatch', {
+        <p>{t(accepted < mission.minimumBatches ? 'groundRequiredBatch' : 'groundExtraBatch', {
           batch: next + 1, accepted, minimum: mission.minimumBatches,
         })}</p>
       </ReportCard>
       <div className="batch-record">
         <strong>{t('groundBatchId', { batch: next + 1 })}</strong>
-        <span>{t(remaining === 1 ? 'groundRemainingOne' : 'groundRemaining', { count: remaining })}</span>
+        <span>{t(remaining === 0 ? 'groundLastBatch' : remaining === 1 ? 'groundRemainingOne' : 'groundRemaining', { count: remaining })}</span>
       </div>
+      {accepted + remaining + 1 === mission.minimumBatches && <p className="action-note">
+        {t('groundArchiveShortfall')}
+      </p>}
       <div className="action-row">
         <ActionButton onClick={() => send({ type: 'checkBatch', batch: next, deliver: true })}>{t('groundAccept')}</ActionButton>
         <button className="button secondary" onClick={() => send({ type: 'checkBatch', batch: next, deliver: false })}>{t('groundArchive')}</button>
