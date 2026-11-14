@@ -3,7 +3,7 @@ import { nextMission } from '../game/progress'
 import {
   affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, currentFlightSegment, currentWork, flightContext, passes, pendingEvent, pendingReview,
   pendingWorkId, repairOptions, taskOptions,
-  sameDesign, workCost, type Action, type BenchLead, type ConfigStep, type Copy, type DesignOption, type SegmentEntry, type Entry, type Game, type Stage, type TestFocus,
+  sameDesign, workCost, type Action, type BenchLead, type ConfigStep, type Copy, type DesignOption, type SegmentEntry, type MissionFile as File, type Entry, type Game, type Stage, type TestFocus,
 } from '../game/mission'
 import type { Message, Translate } from '../i18n'
 import { missions, type MissionModule } from '../missions'
@@ -133,6 +133,7 @@ function DecisionLog({ game, mission, t }: Pick<Props, 'game' | 'mission' | 't'>
       <Disclosure label={entry.review ? t(entry.review.passed ? 'gateApproved' : 'gateReturned', { gate: entry.review.gate })
         : t(logLabel(mission, entry))} value={t('logWeek', { week: entry.week })}>
         <p>{t('logCost', { count: missionMoney(mission, entry.cost, t) })}</p>
+        {entry.detail && <p>{copy(t, entry.detail)}</p>}
         {entry.incomplete && <p>{t('workInterrupted')}</p>}
         {entry.review && <>
           {entry.review.detail && <p>{copy(t, entry.review.detail)}</p>}
@@ -219,6 +220,7 @@ function SegmentHistory({ mission, steps, t }: { mission: MissionModule; steps: 
       const segment = mission.segmentedFlight?.segments.find(item => item.id === step.id)
       return <li key={step.id}>
         <strong>{segment ? t(segment.title) : step.id}</strong>
+        {step.updates?.map((update, index) => <p key={index}>{copy(t, update)}</p>)}
         {step.report && <p>{copy(t, step.report)}</p>}
       </li>
     })}
@@ -231,15 +233,18 @@ function SegmentControls({ game, mission, send, t }: Controls) {
   if (!segment) return null
   const context = flightContext(game)
   const brief = segment.brief?.(context)
+  const file = segment.file?.(context)
   const choices = segment.choices?.(context) ?? []
   return <>
     {context.progress.steps.length > 0 && <SegmentHistory mission={mission} steps={context.progress.steps} t={t} />}
     <h2>{t(segment.title)}</h2>
     {brief && <p>{copy(t, brief)}</p>}
+    {context.progress.updates?.map((update, index) => <p key={index}>{copy(t, update)}</p>)}
+    {file && <MissionFile file={file} t={t} />}
     {choices.length > 0 && <Options legend="segmentChoices" value={choice} choose={setChoice} t={t}
       options={choices.map(option => ({ id: option.id, name: option.label, detail: copy(t, option.detail) }))} />}
     <ActionButton disabled={choices.length > 0 && !choices.some(option => option.id === choice)}
-      onClick={() => send({ type: 'segment', segment: segment.id, choice })}>{t('runSegment')}</ActionButton>
+      onClick={() => send({ type: 'segment', segment: segment.id, choice, turn: context.progress.turn ?? 0 })}>{t('runSegment')}</ActionButton>
   </>
 }
 
@@ -252,7 +257,7 @@ function ReviewControls({ game, send, t }: Controls) {
   const previous = [...game.log].reverse().find(entry => entry.review?.gate === review.gate)?.review
   return <>
     {previous && !previous.passed && previous.detail && <p role="status">{copy(t, previous.detail)}</p>}
-    {review.issues.length > 0 && <ul>{review.issues.map(({ detail }, index) => <li key={index}>{copy(t, detail)}</li>)}</ul>}
+    {review.issues.some(issue => !issue.waiver) && <ul>{review.issues.filter(issue => !issue.waiver).map(({ detail, item }, index) => <li key={index}>{item && `${t(item)} · `}{copy(t, detail)}</li>)}</ul>}
     {offered.length > 0 && <fieldset className="options rows">
       <legend>{t('reviewWaivers')}</legend>
       {offered.map(waiver => <label className="option" key={waiver.id}>
@@ -378,6 +383,16 @@ function Reference({ game, mission, t, send }: Controls) {
   </aside>
 }
 
+function MissionFile({ file, t }: { file: File; t: Translate }) {
+  return <Disclosure label={t(file.title.message, file.title.values)}>
+    <p>{copy(t, file.detail)}</p>
+    <p>{t('lunarHistoryNote')}</p>
+    <ul>{file.sources.map(source => <li key={source.url}>
+      <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>
+    </li>)}</ul>
+  </Disclosure>
+}
+
 function MissionEvent({ game, mission, t, send }: Controls) {
   const event = pendingEvent(game)
   if (!event) return null
@@ -386,9 +401,10 @@ function MissionEvent({ game, mission, t, send }: Controls) {
     <h2 id="mission-event">{t(event.title)}</h2>
     <p>{t(event.detail, event.values?.(game))}</p>
     {work && <p className="notice">{t('workPaused', { work: t(mission.costs[work].label), week: game.week, count: game.pendingWork!.remaining })}</p>}
-    {event.choices.map(choice => <div className="repair-option" key={choice.id}>
+    {event.file && <MissionFile file={event.file} t={t} />}
+    {event.choices.filter(choice => choice.available?.(game) !== false).map(choice => <div className="repair-option" key={choice.id}>
       <div><strong>{t(choice.label)}</strong><small>{t(choice.detail, choice.values?.(game))}</small></div>
-      <button className="button secondary" onClick={() => send({ type: 'choose', event: event.id, choice: choice.id })}>{t('eventChoose')}</button>
+      <button className="button secondary" onClick={() => send({ type: 'choose', event: event.id, choice: choice.id })}>{t('eventChoose')}<span className="sr-only"> {t(choice.label)}</span></button>
     </div>)}
   </section>
 }
@@ -426,7 +442,7 @@ export function Single(props: Props) {
   return <article className="single-mission">
     <Back t={t} onClick={back} />
     <Heading eyebrow={t(mission.title)} title={t(game.returned ? 'returned' : stage)}>
-      {!isCubeSat && stage !== 'results' && t(game.returned ? 'returnedDetail' : mission.stageDetails[stage])}
+      {!isCubeSat && stage !== 'results' && t(game.returned ? 'returnedDetail' : mission.stageDetails[stage], { percent: 5 })}
     </Heading>
     <dl className="resource-line">
       <div><dt>{t('flightWindow')}</dt><dd>{t('weeks', { count: availableWeeks(game) })}</dd></div>
@@ -460,7 +476,7 @@ export function Single(props: Props) {
           {customReview ? <ReviewControls key={game.log.length} {...props} />
             : stage === 'review' && !game.returned && <ActionButton onClick={() => send({ type: 'review' })}>{t('submitReview')}</ActionButton>}
           {stage === 'flight' && (mission.segmentedFlight
-            ? <SegmentControls key={segment?.id} {...props} />
+            ? <SegmentControls key={`${segment?.id}:${game.flightProgress?.turn ?? 0}`} {...props} />
             : <Flight {...props} />)}
         </section>}
         {!game.event && !game.playback && <Reference key={stage} {...props} />}

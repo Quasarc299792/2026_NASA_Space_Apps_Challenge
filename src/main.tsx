@@ -18,10 +18,10 @@ import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 const Team = lazy(() => import('./ui/Team'))
 
 type Screen = 'lobby' | 'brief' | 'single' | 'team'
-type SessionAction = Action | { type: 'new'; missionId: string; records: string[] }
+type SessionAction = Action | { type: 'new'; missionId: string; records: string[]; seed: number }
 
 function session(game: Game | null, action: SessionAction) {
-  return action.type === 'new' ? newGame(action.missionId, action.records) : game && runMission(game, action)
+  return action.type === 'new' ? newGame(action.missionId, action.records, action.seed) : game && runMission(game, action)
 }
 
 function Lobby({ t, game, progress, open, resume, team }: {
@@ -98,7 +98,7 @@ function App() {
   }
 
   function begin() {
-    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress) })
+    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: crypto.getRandomValues(new Uint32Array(1))[0] })
     setScreen('single')
   }
 

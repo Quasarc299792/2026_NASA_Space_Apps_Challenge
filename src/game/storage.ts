@@ -44,6 +44,8 @@ function validContinuation(game: Game, mission: MissionRules) {
   const segments = mission.segmentedFlight?.segments
   return Boolean(game.stage === 'flight' && !game.contact && segments && flightProgress
     && flightProgress.state && typeof flightProgress.state === 'object' && !Array.isArray(flightProgress.state)
+    && (flightProgress.turn === undefined || (Number.isInteger(flightProgress.turn) && flightProgress.turn >= flightProgress.steps.length))
+    && (flightProgress.updates === undefined || Array.isArray(flightProgress.updates))
     && Array.isArray(flightProgress.steps) && flightProgress.steps.length < segments.length
     && flightProgress.steps.every((step, index) => step?.id === segments[index].id && (step.choice === null || typeof step.choice === 'string')))
 }
@@ -55,7 +57,7 @@ export function readGame(): Game | null {
     const game: Game | null = JSON.parse(raw)
     if (!game) return null
     const mission = Object.hasOwn(missionRules, game.missionId) ? missionRules[game.missionId] : undefined
-    if (!mission || !stages.includes(game.stage) || !Array.isArray(game.log) || !Array.isArray(game.events) || !Array.isArray(game.records)
+    if (!mission || (game.seed !== undefined && (!Number.isInteger(game.seed) || game.seed < 0 || game.seed > 0xffffffff)) || !stages.includes(game.stage) || !Array.isArray(game.log) || !Array.isArray(game.events) || !Array.isArray(game.records)
       || !Number.isInteger(game.deadline) || !Number.isInteger(game.week) || game.week < 0
       || !Number.isInteger(game.credits) || game.credits < 0
       || (game.event !== null && !mission.events?.some(event => event.id === game.event))

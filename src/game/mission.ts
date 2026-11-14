@@ -14,10 +14,10 @@ export function passes(evidence: Pick<TestResult, 'checks'>) {
 const stageWork = { feasibility: 'assess', design: 'freeze', build: 'build', integration: 'integrate' } as const
 const workOrder: Work[] = Object.values(stageWork)
 
-export function newGame(missionId: string = missionCatalog[0].id, records: string[] = []): Game {
+export function newGame(missionId: string = missionCatalog[0].id, records: string[] = [], seed = 0): Game {
   const mission = missionRules[missionId]
   const game: Game = {
-    missionId, stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
+    missionId, ...(mission.tasks && { seed: seed >>> 0 }), stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
     revision: 0, gate: 'MDR', analysis: null, evidence: null, flight: null, stop: null, returned: false,
     event: null, events: [], records, log: [],
   }
@@ -32,7 +32,7 @@ export function affordable(game: Game, cost: Cost) {
   return availableWeeks(game) >= cost.weeks && game.credits >= cost.credits
 }
 
-function optionCost(mission: MissionRules, design: Design) {
+export function optionCost(mission: MissionRules, design: Design) {
   return Object.entries(mission.groups).reduce((total, [key, group]) => total + (group.options[design[key]]?.cost ?? 0), 0)
 }
 
@@ -94,11 +94,11 @@ export function eventChoice(game: Game, eventId: string) {
   return game.events.find(entry => entry.startsWith(`${eventId}:`))?.slice(eventId.length + 1) ?? null
 }
 
-function record(game: Game, id: string, cost = 0, details: Partial<Pick<Game['log'][number], 'report' | 'label' | 'incomplete' | 'review'>> = {}): Game {
+function record(game: Game, id: string, cost = 0, details: Partial<Pick<Game['log'][number], 'report' | 'label' | 'incomplete' | 'review' | 'detail'>> = {}): Game {
   return { ...game, log: [...game.log, { id, week: game.week, cost, design: game.design, ...details }] }
 }
 
-function stop(game: Game, reason: Stop): Game {
+export function stop(game: Game, reason: Stop): Game {
   const { pendingWork, ...next } = game
   const stopped: Game = { ...next, stage: 'results', stop: reason, event: null }
   return pendingWork ? record(stopped, jobId(pendingWork.job), pendingWork.cost.credits, { incomplete: true }) : stopped
@@ -106,6 +106,7 @@ function stop(game: Game, reason: Stop): Game {
 
 function checkResources(game: Game): Game {
   if (game.stage === 'flight' || game.stage === 'results') return game
+  if (game.event || game.pendingWork) return game
   if (availableWeeks(game) < 0) return stop(game, 'deadline')
   const mission = rulesFor(game)
   const reason = mission.stopReason?.(game)
@@ -125,7 +126,7 @@ function triggerEvent(game: Game): Game {
 }
 
 function advance(game: Game) {
-  return triggerEvent(checkResources(game))
+  return checkResources(triggerEvent(game))
 }
 
 export function taskOptions(game: Game) {
@@ -186,7 +187,8 @@ function completeJob(game: Game, job: TimedJob, cost: Cost): Game {
     case 'task': {
       const next = mission.tasks![job.task].complete(game)
       const report = next.evidence !== game.evidence ? currentEvidence(next) : null
-      return record(next, job.task, cost.credits, report ? { report } : {})
+      const detail = mission.tasks![job.task].detail?.(game, next)
+      return record(next, job.task, cost.credits, { ...(report && { report }), ...(detail && { detail }) })
     }
     case 'wait': {
       const next = record(game, 'wait', cost.credits)
@@ -248,19 +250,26 @@ function submitReview(game: Game, waiverIds: readonly string[]) {
   return advance(record(next, passed ? 'approve' : 'return', 0, { review: decision, ...(evidence && { report: evidence }) }))
 }
 
-function resolveSegment(game: Game, segmentId: string, choice: string | null): Game {
+function resolveSegment(game: Game, segmentId: string, choice: string | null, turn?: number): Game {
   const flight = rulesFor(game).segmentedFlight
   const segment = currentFlightSegment(game)
-  if (!flight || !segment || segmentId !== segment.id) return game
+  if (!flight || !segment || segmentId !== segment.id || (turn !== undefined && turn !== (game.flightProgress?.turn ?? 0))) return game
   const context = flightContext(game)
   const choices = segment.choices?.(context) ?? []
   if (choices.length ? !choices.some(option => option.id === choice) : choice !== null) return game
-  const { failed, state, report } = segment.resolve(context, choice)
-  const progress = {
-    steps: [...context.progress.steps, { id: segment.id, choice, ...(report && { report }) }],
-    state: state ?? context.progress.state,
+  const { failed, end, continued, state, report } = segment.resolve(context, choice)
+  const nextState = state ?? context.progress.state
+  const turnCount = (context.progress.turn ?? 0) + 1
+  const updates = context.progress.updates ?? []
+  if (continued) {
+    return { ...game, flightProgress: { ...context.progress, state: nextState, turn: turnCount, updates: report ? [...updates, report] : updates } }
   }
-  if (!failed && progress.steps.length < flight.segments.length) return { ...game, flightProgress: progress }
+  const progress = {
+    steps: [...context.progress.steps, { id: segment.id, choice, ...(report && { report }), ...(updates.length > 0 && { updates }) }],
+    state: nextState,
+    turn: turnCount,
+  }
+  if (!failed && !end && progress.steps.length < flight.segments.length) return { ...game, flightProgress: progress }
   const interruptedAt = failed ? segment.id : null
   const result = flight.finish({ ...context, progress }, interruptedAt)
   const { flightProgress: _completed, ...next } = game
@@ -292,21 +301,20 @@ export function runMission(game: Game, action: Action): Game {
     case 'choose': {
       const event = pendingEvent(game)
       const choice = event?.choices.find(item => item.id === action.choice)
-      if (!event || (action.event !== undefined && action.event !== event.id) || !choice) return game
+      if (!event || (action.event !== undefined && action.event !== event.id) || !choice || choice.available?.(game) === false) return game
       const applied = choice.apply(game)
       const resolved = { ...applied, credits: Math.max(0, applied.credits), event: null, events: [...game.events, `${event.id}:${choice.id}`] }
-      const next = record(resolved, 'event', Math.max(0, game.credits - resolved.credits), { label: choice.label })
+      const next = record(resolved, 'event', Math.max(0, game.credits - resolved.credits), { label: choice.label, ...(choice.result && { detail: { message: choice.result } }) })
       if (applied.credits < 0) return stop(next, 'funds')
+      if (next.stage === 'results') return next
       const triggered = triggerEvent(next)
       return triggered.event ? triggered : triggered.pendingWork ? resumeWork(triggered) : checkResources(triggered)
     }
     case 'configure':
       if (!canConfigure(game) || sameDesign(game.design, action.design)
         || !Object.entries(mission.groups).every(([key, group]) => Object.hasOwn(group.options, action.design[key]))) return game
-      if (game.stage === 'design' && mission.reviews?.PDR) {
-        return { ...game, design: action.design, gate: 'PDR', returned: false }
-      }
-      return { ...game, design: action.design }
+      const configured = mission.configure?.(game, action.design) ?? { ...game, design: action.design }
+      return game.stage === 'design' && mission.reviews?.PDR ? { ...configured, gate: 'PDR', returned: false } : configured
     case 'configStep':
       return mission.configurationSteps?.[game.stage]?.includes(action.step) ? { ...game, configStep: action.step } : game
     case 'work':
@@ -335,7 +343,7 @@ export function runMission(game: Game, action: Action): Game {
       if (mission.tasks || game.stage === 'flight' || (game.stage === 'review' && !game.returned)) return game
       return startWork(game, { type: 'wait' }, mission.costs.wait)
     case 'segment':
-      return resolveSegment(game, action.segment, action.choice)
+      return resolveSegment(game, action.segment, action.choice, action.turn)
     case 'cancel':
       return game.stage === 'flight' ? game : stop(game, 'cancelled')
     case 'fly':

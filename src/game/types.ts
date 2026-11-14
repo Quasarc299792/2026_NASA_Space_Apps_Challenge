@@ -34,7 +34,7 @@ export type FlightResult = {
 export type ReviewGate = Extract<Gate, 'PDR' | 'FRR'>
 export type Waiver = { id: string; label: Message; detail: Copy }
 export type Review = {
-  issues: readonly { detail: Copy; waiver?: Waiver }[]
+  issues: readonly { detail: Copy; waiver?: Waiver; item?: Message }[]
   approve?: Copy
   return?: Copy
 }
@@ -46,15 +46,17 @@ export type ReviewDecision = {
 }
 
 export type SegmentChoice = { id: string; label: Message; detail: Copy }
-export type SegmentEntry = { id: string; choice: string | null; report?: Copy }
-export type FlightProgress = { steps: SegmentEntry[]; state: JsonObject }
+export type MissionFile = { title: Copy; detail: Copy; sources: readonly { title: string; url: string }[] }
+export type SegmentEntry = { id: string; choice: string | null; report?: Copy; updates?: Copy[] }
+export type FlightProgress = { steps: SegmentEntry[]; state: JsonObject; turn?: number; updates?: Copy[] }
 export type FlightContext = { game: Game; evidence: Evidence | null; progress: FlightProgress }
 export type FlightSegment = {
   id: string
   title: Message
   brief?(context: FlightContext): Copy
+  file?(context: FlightContext): MissionFile | undefined
   choices?(context: FlightContext): readonly SegmentChoice[]
-  resolve(context: FlightContext, choice: string | null): { failed?: boolean; state?: JsonObject; report?: Copy }
+  resolve(context: FlightContext, choice: string | null): { failed?: boolean; end?: boolean; continued?: boolean; state?: JsonObject; report?: Copy }
 }
 
 export type TimedJob =
@@ -68,11 +70,13 @@ export type PendingWork = { job: TimedJob; cost: Cost; remaining: number }
 export type Entry = {
   id: string; week: number; cost: number; design: Design; report?: Evidence; label?: Message
   incomplete?: boolean
+  detail?: Copy
   review?: ReviewDecision
 }
 
 export type Game = {
   missionId: string
+  seed?: number
   stage: Stage
   week: number
   deadline: number
@@ -104,7 +108,7 @@ export type Action =
   | { type: 'work' | 'analyze' | 'wait' | 'cancel' }
   | { type: 'task'; task: string; turn: number }
   | { type: 'review'; waivers?: readonly string[]; turn?: number }
-  | { type: 'segment'; segment: string; choice: string | null }
+  | { type: 'segment'; segment: string; choice: string | null; turn?: number }
   | { type: 'repair'; remedy: string }
   | { type: 'fly'; choice: string }
   | { type: 'choose'; event?: string; choice: string }
@@ -118,6 +122,8 @@ export type Action =
 export type EventChoice = {
   id: string; label: Message; detail: Message
   values?(game: Game): Record<string, string | number>
+  available?(game: Game): boolean
+  result?: Message
   apply(game: Game): Game
 }
 
@@ -126,6 +132,7 @@ export type MissionEvent = {
   title: Message
   detail: Message
   values?(game: Game): Record<string, string | number>
+  file?: MissionFile
   trigger(game: Game): boolean
   choices: readonly EventChoice[]
 }
@@ -148,6 +155,7 @@ export type MissionRules = {
   flightChoices?: readonly string[]
   events?: readonly MissionEvent[]
   initialize?(game: Game): Game
+  configure?(game: Game, design: Design): Game
   effectiveDeadline?(game: Game): number
   stopReason?(game: Game): Exclude<Stop, 'cancelled'> | null
   // When present, this is the chapter's work menu. IDs refer to entries in costs.
@@ -155,6 +163,7 @@ export type MissionRules = {
     plan(game: Game): Cost | null
     start?(game: Game): Game
     complete(game: Game): Game
+    detail?(before: Game, after: Game): Copy | undefined
   }>
   reviews?: Partial<Record<ReviewGate, (game: Game, evidence: Evidence | null) => Review | null>>
   segmentedFlight?: {
