@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { nextMission } from '../game/progress'
 import {
-  affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, currentFlightSegment, currentWork, flightContext, passes, pendingEvent, pendingReview,
-  pendingWorkId, repairOptions, taskOptions,
-  sameDesign, workCost, type Action, type BenchLead, type ConfigStep, type Copy, type DesignOption, type SegmentEntry, type MissionFile as File, type Entry, type Game, type Stage, type TestFocus,
+  affordable, availableWeeks, baselineRemainingCost, canConfigure, contactEvidence, currentEvidence, currentFlightSegment, currentWork,
+  flightContext, passes, pendingEvent, pendingReview, pendingWorkId, repairOptions, riskAcceptance, taskOptions,
+  sameDesign, workCost, type Action, type BenchLead, type ConfigStep, type Copy, type DesignOption, type SegmentEntry,
+  type MissionFile as File, type Entry, type Game, type Stage, type TestFocus,
 } from '../game/mission'
+import { detection, percent, reviewRiskThreshold, verificationLevels } from '../game/risk'
 import type { Message, Translate } from '../i18n'
 import { missions, type MissionModule } from '../missions'
-import { cubeSat, forecast, planContact, powerTimeline, scopeSegment, testDesign, type CubeSatDesign, type CubeSatEvidence, type CubeSatGame } from '../missions/cubesat'
+import { cubeSat, forecast, planContact, powerTimeline, riskDebrief, scopeSegment, testDesign, type CubeSatDesign, type CubeSatEvidence, type CubeSatGame } from '../missions/cubesat'
 import { Findings, powerFinding, testedBatches } from '../missions/cubesat-ui'
 import { ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Heading, missionMoney, optionValues } from './shared'
 import { ReportCard } from './ReportCard'
@@ -174,9 +176,72 @@ function BenchWork({ game, mission, t, send }: Controls) {
   </>
 }
 
+const levelNames = { none: 'riskLevelNone', analysis: 'riskLevelAnalysis', unit: 'riskLevelUnit', endToEnd: 'riskLevelEndToEnd' } as const
+
+// What the player currently believes about each risk item, and what the next verification level costs.
+function RiskPanel({ game, mission, t, send }: Controls) {
+  if (!mission.risks) return null
+  const items = mission.risks.view(game)
+  const odds = mission.risks.odds(game)
+  const reserve = baselineRemainingCost(game)
+  return <section className="risk-panel" aria-label={t('riskTitle')}>
+    <h2>{t('riskTitle')}</h2>
+    <p className="risk-odds">{t('riskOddsMinimum', { percent: percent(odds.minimum) })} · {t('riskOddsNoFatal', { percent: percent(odds.noFatal) })}</p>
+    {items.map(item => {
+      const { next, fix, state } = item
+      const tooCostly = Boolean(next) && game.credits - next!.credits < reserve
+      return <div className="risk-item" key={item.id}>
+        <div className="risk-head"><strong>{t(item.label)}</strong><span>{t('riskChance', { percent: percent(item.risk) })}</span></div>
+        <small>{t(item.detail)}</small>
+        <small>{t(item.maturity === 'new' ? 'riskMaturityNew' : 'riskMaturityHeritage')} · {t(item.severity === 'fatal' ? 'riskSeverityFatal' : 'riskSeverityDegraded')} · {t('riskLevel', { level: t(levelNames[verificationLevels[state.level]]) })}</small>
+        {state.fixed ? <p className="verified">{t('riskFixed')}</p> : state.found ? <>
+          <p className="warning" role="status">{t('riskTestFound')}</p>
+          <button className="button secondary" disabled={!affordable(game, fix)} onClick={() => send({ type: 'fix', risk: item.id })}>
+            {t('riskFixAction', { work: t(mission.costs[fix.work].label), weeks: fix.weeks, cost: money(fix.credits) })}
+          </button>
+          {!affordable(game, fix) && <small>{t('riskNoFix')}</small>}
+          <small>{t('riskOrFly')}</small>
+        </> : <>
+          {state.level > 0 && <small role="status">{t('riskTestPassed', { percent: percent(1 - detection[state.level]) })}</small>}
+          {next ? <button className="button secondary" disabled={!affordable(game, next) || tooCostly} onClick={() => send({ type: 'verify', risk: item.id })}>
+            {t('riskVerifyAddOn', { work: t(mission.costs[next.work].label), cost: money(next.credits), percent: percent(next.passRisk) })}
+          </button> : <small>{t('riskTopLevel', { percent: percent(1 - detection[state.level]) })}</small>}
+          {tooCostly && <small>{t('riskTooCostly')}</small>}
+        </>}
+      </div>
+    })}
+    <small>{t('riskBeliefNote')} {t('riskAddOnNote')}</small>
+  </section>
+}
+
+// What each risk item turned out to be, what the player believed, and what the next test would have said.
+function RiskDebrief({ game, mission, t }: Pick<Props, 'game' | 'mission' | 't'>) {
+  if (!mission.risks) return null
+  const items = mission.risks.view(game)
+  return <section className="risk-panel" aria-label={t('riskFlightTitle')}>
+    <h2>{t('riskFlightTitle')}</h2>
+    {game.outcomes.map(outcome => {
+      const item = items.find(entry => entry.id === outcome.id)
+      if (!item) return null
+      const next = game.missionId === cubeSat.id ? riskDebrief(game, outcome.id) : null
+      const values = { item: t(item.label), percent: percent(outcome.believed) }
+      return <div className="risk-item" key={outcome.id}>
+        <p className={outcome.failed ? 'warning' : undefined}>{t(outcome.failed ? 'riskFlightFailed' : 'riskFlightHeld', values)}</p>
+        {outcome.failed && <small>{t(item.failure)}</small>}
+        {outcome.failed && <small>{item.state.found ? t('riskFlewKnowingly') : next
+          ? t(next.found ? 'riskDebriefNext' : 'riskDebriefMissed', { work: t(mission.costs[next.work].label), weeks: next.weeks, cost: money(next.credits) })
+          : t('riskDebriefTop')}</small>}
+      </div>
+    })}
+    {game.outcomes.length > 0 && game.outcomes.every(outcome => !outcome.failed) && <small>{t('riskCleanAll')}</small>}
+    {game.accepted.length > 0 && <small>{t('riskAccepted', { items: game.accepted.map(id => t(items.find(entry => entry.id === id)!.label)).join(', ') })}</small>}
+    <small>{t('riskSeed', { seed: game.seed })} · {t('riskGameSetting')}</small>
+  </section>
+}
+
 function Flight({ game, mission, t, send }: Controls) {
   const [choice, setChoice] = useState(mission.flightChoices?.[0] ?? '')
-  const evidence = currentEvidence(game)
+  const evidence = contactEvidence(game)
   if (!evidence) return null
   if (game.contact) {
     const { next, accepted, choice, diagnosticsPending } = game.contact
@@ -305,6 +370,7 @@ function Results({ game, mission, t, back }: Props) {
         {flight.segments && <SegmentHistory mission={mission} steps={flight.segments} t={t} />}
       </Disclosure> : <div className="receipt-line"><span>{t('delivery')}</span><small>{t('noFlight')}</small></div>}
     </section>
+    <RiskDebrief game={game} mission={mission} t={t} />
     <ActionButton onClick={back}>{t('home')}</ActionButton>
     <div className="references">
       <p>{t('gates', { gate: game.gate })}</p>
@@ -386,7 +452,6 @@ function Reference({ game, mission, t, send }: Controls) {
 function MissionFile({ file, t }: { file: File; t: Translate }) {
   return <Disclosure label={t(file.title.message, file.title.values)}>
     <p>{copy(t, file.detail)}</p>
-    <p>{t('lunarHistoryNote')}</p>
     <ul>{file.sources.map(source => <li key={source.url}>
       <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>
     </li>)}</ul>
@@ -473,12 +538,17 @@ export function Single(props: Props) {
             {t(!mission.forecastClear?.(latestAnalysis.forecast) ? 'analysisTradeoff' : 'analysisClear')}
           </p>}
           {game.returned && stage === 'review' && !mission.tasks && repairOptions(game).length > 0 && <Repair {...props} />}
+          {isCubeSat && stage === 'review' && !game.returned && checks && passes(checks) && riskAcceptance(game).length > 0 && <p className="action-note">
+            {t('riskSignNote', { items: mission.risks!.view(game).filter(item => item.risk > reviewRiskThreshold)
+              .map(item => t('riskAcceptItem', { item: t(item.label), percent: percent(item.risk), severity: t(item.severity === 'fatal' ? 'riskSeverityFatal' : 'riskSeverityDegraded') })).join(' / ') })}
+          </p>}
           {customReview ? <ReviewControls key={game.log.length} {...props} />
             : stage === 'review' && !game.returned && <ActionButton onClick={() => send({ type: 'review' })}>{t('submitReview')}</ActionButton>}
           {stage === 'flight' && (mission.segmentedFlight
             ? <SegmentControls key={`${segment?.id}:${game.flightProgress?.turn ?? 0}`} {...props} />
             : <Flight {...props} />)}
         </section>}
+        {!game.event && !game.playback && stage !== 'flight' && <RiskPanel {...props} />}
         {!game.event && !game.playback && <Reference key={stage} {...props} />}
       </div>
     </div>

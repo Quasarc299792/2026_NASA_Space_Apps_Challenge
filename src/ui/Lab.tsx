@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FastForward } from 'lucide-react'
-import { currentEvidence, type Action } from '../game/mission'
+import { contactEvidence, currentEvidence, type Action } from '../game/mission'
 import type { Message, Translate } from '../i18n'
 import { benchSequence, cubeSat, departments, forecast, planContact, powerTimeline, scopeSegment, type CubeSatEvidence, type CubeSatGame, type Department } from '../missions/cubesat'
 import { drawLab, type LabArt } from './labArt'
@@ -25,7 +25,8 @@ export function Lab({ game, send, t }: { game: CubeSatGame; send: (action: Actio
   const evidence = currentEvidence(game) as CubeSatEvidence | null
   const timeline = powerTimeline(design)
   const available = cubeSat.supplies[design.supply].watts
-  const receiving = contact && evidence ? planContact(evidence, contact.choice) : null
+  const flown = contactEvidence(game) as CubeSatEvidence | null
+  const receiving = contact && flown ? planContact(flown, contact.choice) : null
   const sequence = benchSequence(game.benchLead)
   const scope = game.testFocus && scopeSegment(timeline, game.testFocus)
   const segment = playback?.kind === 'integration' ? timeline[playback.step]

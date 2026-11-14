@@ -1,4 +1,5 @@
 import { missionCatalog, missionRules } from '../missions/rules'
+import { reviewRiskThreshold, untested, verifyDefect, type DefectState } from './risk'
 import type { Action, Cost, Design, FlightResult, Game, MissionRules, ReviewDecision, ReviewGate, Stop, TestResult, TimedJob, Work } from './types'
 
 export type * from './types'
@@ -14,14 +15,41 @@ export function passes(evidence: Pick<TestResult, 'checks'>) {
 const stageWork = { feasibility: 'assess', design: 'freeze', build: 'build', integration: 'integrate' } as const
 const workOrder: Work[] = Object.values(stageWork)
 
-export function newGame(missionId: string = missionCatalog[0].id, records: string[] = [], seed = 0): Game {
+// The seed used when none is given. Every risk item of the first mission is clean on it, so rule tests that
+// are not about risk stay deterministic.
+export const defaultSeed = 6
+
+export function newGame(missionId: string = missionCatalog[0].id, records: string[] = [], seed: number = defaultSeed): Game {
   const mission = missionRules[missionId]
   const game: Game = {
-    missionId, ...(mission.tasks && { seed: seed >>> 0 }), stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
+    missionId, stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
     revision: 0, gate: 'MDR', analysis: null, evidence: null, flight: null, stop: null, returned: false,
-    event: null, events: [], records, log: [],
+    event: null, events: [], records, log: [], seed: seed >>> 0, risks: {}, accepted: [], outcomes: [],
   }
   return triggerEvent(mission.initialize?.(game) ?? game)
+}
+
+export function riskState(game: Game, risk: string): DefectState {
+  return game.risks[risk] ?? untested
+}
+
+// Risks the player signs for by submitting to flight review.
+export function riskAcceptance(game: Game) {
+  return rulesFor(game).risks?.view(game).filter(item => item.risk > reviewRiskThreshold).map(item => item.id) ?? []
+}
+
+// Evidence for the ground pass. Before the pass starts the player only has the test evidence.
+export function contactEvidence(game: Game) {
+  const evidence = currentEvidence(game)
+  return evidence && (game.contact || game.flight) ? rulesFor(game).risks?.inFlight(game, evidence) ?? evidence : evidence
+}
+
+// A different design option is a different item, so what was learned about the old one is dropped.
+function reconcileRisks(game: Game, design: Design): Game {
+  const risks = rulesFor(game).risks
+  if (!risks) return { ...game, design }
+  const kept = Object.fromEntries(Object.entries(game.risks).filter(([id]) => risks.identity(game.design, id).item === risks.identity(design, id).item))
+  return { ...game, design, risks: kept }
 }
 
 export function availableWeeks(game: Game) {
@@ -52,6 +80,7 @@ function jobId(job: TimedJob) {
   if (job.type === 'work') return job.work
   if (job.type === 'repair') return job.remedy
   if (job.type === 'task') return job.task
+  if (job.type === 'verify' || job.type === 'fix') return job.work
   return job.type
 }
 
@@ -178,11 +207,24 @@ function completeJob(game: Game, job: TimedJob, cost: Cost): Game {
     case 'analyze': {
       const result = mission.forecast!(game.design)
       const id = mission.forecastClear?.(result) ? 'analysisClear' : 'analysisConflict'
-      return record({ ...game, analysis: { design: game.design, forecast: result } }, id, cost.credits)
+      const risks = { ...game.risks }
+      for (const id of mission.risks?.analysisCovers ?? []) {
+        const state = riskState(game, id)
+        const { item, maturity } = mission.risks!.identity(game.design, id)
+        if (state.level === 0) risks[id] = verifyDefect(game.seed, item, maturity, state)
+      }
+      return record({ ...game, risks, analysis: { design: game.design, forecast: result } }, id, cost.credits)
     }
     case 'repair': {
       const design = mission.applyRemedy!(game.design, job.remedy)
-      return record({ ...game, design, revision: game.revision + 1, stage: 'integration', returned: false }, job.remedy, cost.credits)
+      return record({ ...reconcileRisks(game, design), revision: game.revision + 1, stage: 'integration', returned: false }, job.remedy, cost.credits)
+    }
+    case 'verify':
+    case 'fix': {
+      const previous = riskState(game, job.risk)
+      const { item, maturity } = mission.risks!.identity(game.design, job.risk)
+      const state = job.type === 'verify' ? verifyDefect(game.seed, item, maturity, previous) : { ...previous, fixed: true }
+      return record({ ...game, risks: { ...game.risks, [job.risk]: state } }, job.work, cost.credits)
     }
     case 'task': {
       const next = mission.tasks![job.task].complete(game)
@@ -231,7 +273,7 @@ function submitReview(game: Game, waiverIds: readonly string[]) {
   if (!review) {
     if (mission.reviews?.FRR || game.stage !== 'review' || !evidence || game.returned || waiverIds.length) return game
     if (availableWeeks(game) < 0) return stop(game, 'deadline')
-    if (passes(evidence)) return record({ ...game, stage: 'flight', gate: 'FRR' }, 'approve', 0, { report: evidence })
+    if (passes(evidence)) return record({ ...game, stage: 'flight', gate: 'FRR', accepted: riskAcceptance(game) }, 'approve', 0, { report: evidence })
     const returned = record({ ...game, returned: true }, 'return', 0, { report: evidence })
     if (availableWeeks(game) === 0) return stop(returned, 'deadline')
     if (game.credits < (mission.costs.integrate?.credits ?? 0)) return stop(returned, 'funds')
@@ -313,7 +355,7 @@ export function runMission(game: Game, action: Action): Game {
     case 'configure':
       if (!canConfigure(game) || sameDesign(game.design, action.design)
         || !Object.entries(mission.groups).every(([key, group]) => Object.hasOwn(group.options, action.design[key]))) return game
-      const configured = mission.configure?.(game, action.design) ?? { ...game, design: action.design }
+      const configured = mission.configure?.(game, action.design) ?? reconcileRisks(game, action.design)
       return game.stage === 'design' && mission.reviews?.PDR ? { ...configured, gate: 'PDR', returned: false } : configured
     case 'configStep':
       return mission.configurationSteps?.[game.stage]?.includes(action.step) ? { ...game, configStep: action.step } : game
@@ -339,6 +381,18 @@ export function runMission(game: Game, action: Action): Game {
       if (mission.tasks || !mission.applyRemedy || game.stage !== 'review' || !game.returned || !repairOptions(game).includes(action.remedy)) return game
       return startWork(game, action, mission.costs[action.remedy])
     }
+    case 'verify':
+    case 'fix': {
+      // Verification changes what the player knows. Only a fix changes the item itself.
+      const item = mission.risks?.view(game).find(entry => entry.id === action.risk)
+      if (!item || game.stage === 'flight') return game
+      if (action.type === 'verify') {
+        if (!item.next || item.state.found || item.state.fixed || !affordable(game, item.next)) return game
+        return startWork(game, { ...action, work: item.next.work }, item.next)
+      }
+      if (!item.state.found || item.state.fixed || !affordable(game, item.fix)) return game
+      return startWork(game, { ...action, work: item.fix.work }, item.fix)
+    }
     case 'wait':
       if (mission.tasks || game.stage === 'flight' || (game.stage === 'review' && !game.returned)) return game
       return startWork(game, { type: 'wait' }, mission.costs.wait)
@@ -351,16 +405,18 @@ export function runMission(game: Game, action: Action): Game {
       const evidence = currentEvidence(game)
       if (game.stage !== 'flight' || mission.segmentedFlight || game.contact || !evidence
         || (!mission.reviews?.FRR && !passes(evidence)) || !mission.flightChoices?.includes(action.choice)) return game
+      const flown = { ...game, outcomes: mission.risks?.outcomes(game) ?? [] }
+      const actual = mission.risks?.inFlight(game, evidence) ?? evidence
       if (action.type === 'fly') return mission.fly
-        ? record({ ...game, stage: 'results', flight: mission.fly(evidence, action.choice) }, 'operate') : game
+        ? record({ ...flown, stage: 'results', flight: mission.fly(actual, action.choice) }, 'operate') : game
       if (!mission.contact) return game
-      const { batches, diagnostics } = mission.contact.plan(evidence, action.choice)
-      if (!batches && !diagnostics) return finishContact(game, mission.contact.finish(evidence, action.choice, 0))
-      return { ...game, contact: { choice: action.choice, next: 0, accepted: 0, diagnosticsPending: diagnostics > 0 } }
+      const { batches, diagnostics } = mission.contact.plan(actual, action.choice)
+      if (!batches && !diagnostics) return finishContact(flown, mission.contact.finish(actual, action.choice, 0))
+      return { ...flown, contact: { choice: action.choice, next: 0, accepted: 0, diagnosticsPending: diagnostics > 0 } }
     }
     case 'checkDiagnostics': {
       const { contact } = game
-      const evidence = currentEvidence(game)
+      const evidence = contactEvidence(game)
       if (game.stage !== 'flight' || !evidence || !contact?.diagnosticsPending || !mission.contact) return game
       return mission.contact.plan(evidence, contact.choice).batches
         ? { ...game, contact: { ...contact, diagnosticsPending: false } }
@@ -368,7 +424,7 @@ export function runMission(game: Game, action: Action): Game {
     }
     case 'checkBatch': {
       const { contact } = game
-      const evidence = currentEvidence(game)
+      const evidence = contactEvidence(game)
       if (game.stage !== 'flight' || !evidence || !contact || contact.diagnosticsPending
         || action.batch !== contact.next || !mission.contact) return game
       const { batches } = mission.contact.plan(evidence, contact.choice)

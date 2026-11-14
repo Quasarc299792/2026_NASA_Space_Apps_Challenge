@@ -19,9 +19,10 @@ const summary = (page: Page, text: string) => page.locator('summary').filter({ h
 const heading = (page: Page, name: string) => page.getByRole('heading', { name, exact: true })
 const saved = (page: Page): Promise<Game> => page.evaluate(() => JSON.parse(localStorage.getItem('space-mission.single.v2')!))
 
-async function start(page: Page, language: keyof typeof labels = 'en') {
+// Seed 6 is a run on which every risk item is clean, so the routes below do not depend on luck.
+async function start(page: Page, language: keyof typeof labels = 'en', seed = 6) {
   const copy = labels[language]
-  await page.goto('/')
+  await page.goto(`/?seed=${seed}`)
   if (language === 'zh') await button(page, '繁中').click()
   await button(page, copy.brief).click()
   await expect(page.getByText('$1,000,000', { exact: true })).toBeVisible()
@@ -217,6 +218,7 @@ test('a saved mission resumes at flight review and can archive a batch', async (
     localStorage.setItem('space-mission.single.v2', JSON.stringify({
       missionId: 'cubesat', stage: 'review', week: 4, deadline: 6, credits: 45, design, revision: 0, gate: 'CDR',
       analysis: null, flight: null, stop: null, returned: false, event: null, events: [], records: [], log: [],
+      seed: 6, risks: {}, accepted: [], outcomes: [],
       evidence: {
         design, payloadWatts: 3, peak: 9, available: 10, deficit: 0, contactCapacity: 4, batches: 2, testedBatches: 2,
         ditl: { separation: 0, deploy: 15, firstTx: 32, elapsed: 32, threshold: 30 },
@@ -232,4 +234,62 @@ test('a saved mission resumes at flight review and can archive a batch', async (
   await button(page, 'Keep in lab archive').click()
   await expect(heading(page, 'Launched · delivery incomplete')).toBeVisible()
   expect(await saved(page)).toMatchObject({ week: 4, credits: 45, flight: { batches: 1, archived: 1 } })
+})
+
+test('seed 13: a test finds a charging defect, the fix takes a week and the mission still delivers', async ({ page }) => {
+  await start(page, 'en', 13)
+  const risks = page.getByRole('region', { name: 'Risk items' })
+  await expect(risks.getByText('Meets the minimum requirement: 64%')).toBeVisible()
+  await button(page, /Analyze imager calibration/).click()
+  await expect(risks.getByText('You put this risk at 11%')).toBeVisible()
+  await expect(page.getByText('$960,000', { exact: true })).toBeVisible()
+  await button(page, /Analyze the charging budget/).click()
+  await expect(risks.getByText('The test found a problem.')).toBeVisible()
+  await expect(risks.getByText('You put this risk at 100%')).toBeVisible()
+  await expect(risks.getByText('Meets the minimum requirement: 0%')).toBeVisible()
+  await button(page, /Rework the charging circuit/).click()
+  await expect(risks.getByText('Fixed. This item is clean.')).toBeVisible()
+  await expect(page.getByText('5 wk', { exact: true })).toBeVisible()
+  expect(await saved(page)).toMatchObject({ seed: 13, week: 1, credits: 87, risks: { power: { level: 1, found: true, fixed: true } } })
+  await design(page)
+  await assemble(page, 'en', true)
+  await button(page, labels.en.test).click()
+  await button(page, labels.en.skip).click()
+  await expect(page.getByText('Submitting signs for these risks: Imager calibration: 11% · degrades the mission.')).toBeVisible()
+  await button(page, labels.en.review).click()
+  await button(page, labels.en.pass).click()
+  await finishDelivery(page, 2)
+  await expect(heading(page, 'Mission delivered')).toBeVisible()
+  await expect(page.getByText('Charging in orbit held. You had put the risk at 0%.')).toBeVisible()
+  await expect(page.getByText('Run seed: 13')).toBeVisible()
+})
+
+test('seed 13 without verification: the defect costs a batch and the debrief names the test that would have found it', async ({ page }) => {
+  await start(page, 'zh', 13)
+  await design(page, 'zh')
+  await assemble(page, 'zh', true)
+  await button(page, labels.zh.test).click()
+  await button(page, labels.zh.skip).click()
+  await button(page, labels.zh.review).click()
+  await button(page, labels.zh.pass).click()
+  await expect(readout(page)).toHaveText('正在接收第 1／1 批觀測')
+  await finishDelivery(page, 1, 'zh')
+  await expect(heading(page, '已發射・交付未達標')).toBeVisible()
+  await expect(page.getByText('在軌充電失敗。你當時認知的風險是 20%。')).toBeVisible()
+  await expect(page.getByText('當初做「分析充電預算」（0 週、$40,000）就會測出這個問題。')).toBeVisible()
+  expect((await saved(page)).outcomes).toEqual([{ id: 'imaging', believed: 0.2, failed: false }, { id: 'power', believed: 0.2, failed: true }])
+})
+
+test('a save from before seeded risk is dropped and the lobby offers a new mission', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => {
+    const design = { payload: 'basic', supply: 'standard', schedule: 'overlap', radio: 'compliant' }
+    localStorage.setItem('space-mission.single.v2', JSON.stringify({
+      missionId: 'cubesat', stage: 'design', week: 1, deadline: 6, credits: 94, design, revision: 0, gate: 'PDR',
+      analysis: null, evidence: null, flight: null, stop: null, returned: false, event: null, events: [], records: [], log: [],
+    }))
+  })
+  await page.reload()
+  await expect(button(page, 'Continue mission')).toBeHidden()
+  await expect(button(page, labels.en.brief)).toBeVisible()
 })

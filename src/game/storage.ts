@@ -27,6 +27,8 @@ function jobInRules(job: TimedJob, mission: MissionRules) {
   switch (job.type) {
     case 'task': return Object.hasOwn(mission.tasks ?? {}, job.task) && Object.hasOwn(mission.costs, job.task)
     case 'work': return ['assess', 'freeze', 'build', 'integrate'].includes(job.work) && Object.hasOwn(mission.costs, job.work)
+    case 'verify':
+    case 'fix': return Boolean(mission.risks && Object.hasOwn(mission.costs, job.work))
     case 'repair': return Object.hasOwn(mission.costs, job.remedy)
     case 'analyze':
     case 'wait': return Object.hasOwn(mission.costs, job.type)
@@ -57,9 +59,12 @@ export function readGame(): Game | null {
     const game: Game | null = JSON.parse(raw)
     if (!game) return null
     const mission = Object.hasOwn(missionRules, game.missionId) ? missionRules[game.missionId] : undefined
-    if (!mission || (game.seed !== undefined && (!Number.isInteger(game.seed) || game.seed < 0 || game.seed > 0xffffffff)) || !stages.includes(game.stage) || !Array.isArray(game.log) || !Array.isArray(game.events) || !Array.isArray(game.records)
+    if (!mission || !stages.includes(game.stage) || !Array.isArray(game.log) || !Array.isArray(game.events) || !Array.isArray(game.records)
       || !Number.isInteger(game.deadline) || !Number.isInteger(game.week) || game.week < 0
       || !Number.isInteger(game.credits) || game.credits < 0
+      // Saves from before seeded risk have no seed. They are dropped so the lobby offers a new mission.
+      || !Number.isInteger(game.seed) || game.seed < 0 || game.seed > 0xffffffff || typeof game.risks !== 'object' || game.risks === null
+      || !Array.isArray(game.accepted) || !Array.isArray(game.outcomes)
       || (game.event !== null && !mission.events?.some(event => event.id === game.event))
       || !validContinuation(game, mission)
       || !Object.entries(mission.groups).every(([group, { options }]) => Object.hasOwn(options, game.design?.[group]))) return null

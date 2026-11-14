@@ -1,4 +1,5 @@
 import type { Message } from '../i18n/en'
+import type { DefectState, Maturity, Outcome, Severity } from './risk'
 
 export type Design = Record<string, string>
 export type Cost = { weeks: number; credits: number }
@@ -63,6 +64,7 @@ export type TimedJob =
   | { type: 'work'; work: Work; lab?: { benchLead?: BenchLead; testFocus?: TestFocus } }
   | { type: 'analyze' | 'wait' }
   | { type: 'repair'; remedy: string }
+  | { type: 'verify' | 'fix'; risk: string; work: string }
   | { type: 'task'; task: string }
 
 export type PendingWork = { job: TimedJob; cost: Cost; remaining: number }
@@ -76,7 +78,6 @@ export type Entry = {
 
 export type Game = {
   missionId: string
-  seed?: number
   stage: Stage
   week: number
   deadline: number
@@ -93,6 +94,12 @@ export type Game = {
   events: string[]
   records: string[]
   log: Entry[]
+  // seed fixes every hidden truth of the run. risks holds what the player has learned about each risk item,
+  // accepted the risks signed for at flight review, and outcomes what each item turned out to be in flight.
+  seed: number
+  risks: Record<string, DefectState>
+  accepted: string[]
+  outcomes: Outcome[]
   playback?: LabPlayback
   benchLead?: BenchLead
   testFocus?: TestFocus
@@ -110,6 +117,7 @@ export type Action =
   | { type: 'review'; waivers?: readonly string[]; turn?: number }
   | { type: 'segment'; segment: string; choice: string | null; turn?: number }
   | { type: 'repair'; remedy: string }
+  | { type: 'verify' | 'fix'; risk: string }
   | { type: 'fly'; choice: string }
   | { type: 'choose'; event?: string; choice: string }
   | { type: 'configStep'; step: ConfigStep }
@@ -137,6 +145,33 @@ export type MissionEvent = {
   choices: readonly EventChoice[]
 }
 
+// One risk item as the workbench shows it. risk is the player's belief, never the truth.
+export type RiskView = {
+  id: string
+  label: Message
+  detail: Message
+  failure: Message
+  severity: Severity
+  maturity: Maturity
+  state: DefectState
+  risk: number
+  // The next verification level: its cost, what the player would believe after a pass and the share of defects it misses.
+  next: (Cost & { work: string; passRisk: number; missRate: number }) | null
+  fix: Cost & { work: string }
+}
+
+export type MissionRisks = {
+  // The seeded item behind a risk for this design. A different design option is a different item.
+  identity(design: Design, risk: string): { item: string; maturity: Maturity }
+  view(game: Game): RiskView[]
+  // Risk items whose analysis level is covered by the mission's optional design analysis.
+  analysisCovers?: readonly string[]
+  odds(game: Game): { minimum: number; noFatal: number }
+  // The evidence as it plays out in flight once defects that were never fixed take effect.
+  inFlight(game: Game, evidence: Evidence): Evidence
+  outcomes(game: Game): Outcome[]
+}
+
 export type MissionRules = {
   id: string
   title: Message
@@ -154,6 +189,7 @@ export type MissionRules = {
   reputation: { minimum: number; stretch: number }
   flightChoices?: readonly string[]
   events?: readonly MissionEvent[]
+  risks?: MissionRisks
   initialize?(game: Game): Game
   configure?(game: Game, design: Design): Game
   effectiveDeadline?(game: Game): number
