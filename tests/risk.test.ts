@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  drawFromPool, exceedChance, hiddenRisk, hiddenValue, itemRandom, knownRange, missionOdds, residualRisk, residualRiskAt,
-  riskFloor, rollHidden, rollItem, seedFromText, type Maturity,
+  believedRisk, defectBelief, defectChance, defectInFlight, detection, drawFromPool, exceedChance, hasDefect, hiddenValue, itemRandom,
+  knownRange, missionOdds, seedFromText, testResult, untested, verifyDefect, wouldDetect, type DefectState, type Maturity,
 } from '../src/game/risk'
 
 const seeds = Array.from({ length: 4000 }, (_, index) => index + 1)
+const maturities = Object.keys(defectChance) as Maturity[]
+const close = (actual: number, expected: number, tolerance: number, label = '') =>
+  assert.ok(Math.abs(actual - expected) < tolerance, `${label} expected ${expected}, got ${actual}`)
 
-test('the same seed and item always give the same draw', () => {
+test('the same seed and item always give the same truth and the same test results', () => {
   for (const seed of [0, 1, 42, 2 ** 31, 2 ** 32 - 1]) {
     assert.equal(itemRandom(seed, 'lift'), itemRandom(seed, 'lift'))
-    assert.deepEqual(rollItem(seed, 'landing', 0.4), rollItem(seed, 'landing', 0.4))
+    assert.equal(hasDefect(seed, 'landing', 'new'), hasDefect(seed, 'landing', 'new'))
     assert.equal(hiddenValue(seed, 'lift', { min: 0, max: 20 }), hiddenValue(seed, 'lift', { min: 0, max: 20 }))
+    for (const level of [1, 2, 3]) assert.equal(testResult(seed, 'landing', 'new', level), testResult(seed, 'landing', 'new', level))
   }
   assert.equal(seedFromText('demo'), seedFromText('demo'))
   assert.notEqual(seedFromText('demo'), seedFromText('demo2'))
@@ -21,53 +25,97 @@ test('the same seed and item always give the same draw', () => {
 })
 
 test('draws are spread evenly over [0, 1)', () => {
-  const values = seeds.map(seed => itemRandom(seed, 'landing:roll'))
+  const values = seeds.map(seed => itemRandom(seed, 'landing:truth'))
   assert.ok(values.every(value => value >= 0 && value < 1))
-  const mean = values.reduce((total, value) => total + value, 0) / values.length
-  assert.ok(Math.abs(mean - 0.5) < 0.02, `mean ${mean}`)
+  close(values.reduce((total, value) => total + value, 0) / values.length, 0.5, 0.02, 'mean')
   for (let decile = 0; decile < 10; decile += 1) {
-    const share = values.filter(value => Math.floor(value * 10) === decile).length / values.length
-    assert.ok(Math.abs(share - 0.1) < 0.025, `decile ${decile}: ${share}`)
+    close(values.filter(value => Math.floor(value * 10) === decile).length / values.length, 0.1, 0.025, `decile ${decile}`)
   }
 })
 
-test('one item does not move another: results are uncorrelated and independent of what else is rolled', () => {
-  const first = seeds.map(seed => itemRandom(seed, 'lift:roll'))
-  const second = seeds.map(seed => itemRandom(seed, 'link:roll'))
+test('one item does not move another, and a truth does not depend on what else is tested', () => {
+  const first = seeds.map(seed => itemRandom(seed, 'lift:truth'))
+  const second = seeds.map(seed => itemRandom(seed, 'link:truth'))
+  const third = seeds.map(seed => itemRandom(seed, 'link:detect'))
   const mean = (list: number[]) => list.reduce((total, value) => total + value, 0) / list.length
-  const [a, b] = [mean(first), mean(second)]
-  const covariance = mean(first.map((value, index) => (value - a) * (second[index] - b)))
-  const correlation = covariance / Math.sqrt(mean(first.map(value => (value - a) ** 2)) * mean(second.map(value => (value - b) ** 2)))
-  assert.ok(Math.abs(correlation) < 0.05, `correlation ${correlation}`)
+  const correlation = (a: number[], b: number[]) => {
+    const [ma, mb] = [mean(a), mean(b)]
+    return mean(a.map((value, index) => (value - ma) * (b[index] - mb))) / Math.sqrt(mean(a.map(value => (value - ma) ** 2)) * mean(b.map(value => (value - mb) ** 2)))
+  }
+  assert.ok(Math.abs(correlation(first, second)) < 0.05)
+  assert.ok(Math.abs(correlation(second, third)) < 0.05)
 
-  // Rolling other items first, or at a different risk, leaves this item's draw untouched.
-  const alone = rollItem(99, 'landing', 0.4)
-  rollItem(99, 'surface', 0.2)
-  rollItem(99, 'lift', 0.02)
-  assert.equal(rollItem(99, 'landing', 0.1).value, alone.value)
-  assert.deepEqual(rollItem(99, 'landing', 0.4), alone)
+  const truth = hasDefect(99, 'landing', 'new')
+  testResult(99, 'surface', 'heritage', 3)
+  hiddenValue(99, 'lift', { min: 0, max: 45 })
+  assert.equal(hasDefect(99, 'landing', 'new'), truth)
 })
 
-test('each verification level lowers the risk, by less each time, and never below the floor', () => {
-  for (const maturity of Object.keys(residualRisk) as Maturity[]) {
-    const levels = residualRisk[maturity]
-    for (let level = 1; level < levels.length; level += 1) assert.ok(levels[level] < levels[level - 1])
-    assert.ok(levels.every(risk => risk >= riskFloor))
-    assert.equal(levels.at(-1), riskFloor)
-    assert.equal(residualRiskAt(maturity, 9), riskFloor)
-    assert.equal(residualRiskAt(maturity, -1), levels[0])
+test('defects start at the stated rates and each level catches the stated share of them', () => {
+  assert.deepEqual(defectChance, { heritage: 0.2, new: 0.4 })
+  assert.deepEqual(detection, [0, 0.5, 0.85, 0.97])
+  for (const maturity of maturities) {
+    const defective = seeds.filter(seed => hasDefect(seed, 'landing', maturity))
+    close(defective.length / seeds.length, defectChance[maturity], 0.025, maturity)
+    for (const level of [1, 2, 3]) {
+      close(defective.filter(seed => testResult(seed, 'landing', maturity, level) === 'found').length / defective.length, detection[level], 0.04, `${maturity} level ${level}`)
+    }
   }
-  assert.ok(residualRisk.new.every((risk, level) => risk >= residualRisk.heritage[level]))
-  assert.deepEqual(residualRisk.heritage, [0.2, 0.12, 0.05, 0.02])
-  assert.deepEqual(residualRisk.new, [0.4, 0.25, 0.1, 0.02])
+  // A clean item never fails a test, and no test runs at level 0.
+  for (const seed of seeds.slice(0, 500)) {
+    if (!hasDefect(seed, 'landing', 'new')) for (const level of [1, 2, 3]) assert.equal(testResult(seed, 'landing', 'new', level), 'passed')
+    assert.equal(testResult(seed, 'landing', 'new', 0), 'passed')
+    // A deeper level catches everything a shallower one does.
+    for (const level of [1, 2]) if (wouldDetect(seed, 'landing', level)) assert.ok(wouldDetect(seed, 'landing', level + 1))
+  }
 })
 
-test('rolls fail at the stated rate', () => {
-  for (const risk of [0.02, 0.2, 0.4]) {
-    const failures = seeds.filter(seed => rollItem(seed, 'landing', risk).failed).length / seeds.length
-    assert.ok(Math.abs(failures - risk) < 0.025, `risk ${risk}: ${failures}`)
+test('the believed risk follows Bayes’ rule and matches how often a passed item is in fact defective', () => {
+  close(believedRisk('new', 0), 0.4, 1e-9)
+  close(believedRisk('new', 1), 0.25, 1e-9)
+  close(believedRisk('new', 2), 0.4 * 0.15 / (0.4 * 0.15 + 0.6), 1e-9)
+  close(believedRisk('new', 3), 0.4 * 0.03 / (0.4 * 0.03 + 0.6), 1e-9)
+  close(believedRisk('heritage', 0), 0.2, 1e-9)
+  close(believedRisk('heritage', 1), 0.1 / 0.9, 1e-9)
+  for (const maturity of maturities) {
+    for (const level of [1, 2, 3]) {
+      assert.ok(believedRisk(maturity, level) < believedRisk(maturity, level - 1))
+      assert.ok(believedRisk(maturity, level) > 0, 'a passed test never proves the item is clean')
+      const passed = seeds.filter(seed => testResult(seed, 'landing', maturity, level) === 'passed')
+      close(passed.filter(seed => hasDefect(seed, 'landing', maturity)).length / passed.length, believedRisk(maturity, level), 0.02, `${maturity} level ${level}`)
+    }
   }
-  assert.equal(seeds.some(seed => rollItem(seed, 'x', 0).failed), false)
+})
+
+test('verification changes what the player knows and never the truth. Only a fix changes the truth', () => {
+  let missed = 0
+  let wasted = 0
+  let caught = 0
+  for (const seed of seeds.slice(0, 1000)) {
+    const truth = hasDefect(seed, 'link', 'new')
+    let state: DefectState = untested
+    close(defectBelief('new', state), 0.4, 1e-9)
+    for (let step = 0; step < 3; step += 1) {
+      const next = verifyDefect(seed, 'link', 'new', state)
+      if (state.found) assert.equal(next, state, 'nothing more to learn once the defect is found')
+      state = next
+      assert.equal(hasDefect(seed, 'link', 'new'), truth)
+      assert.equal(defectInFlight(seed, 'link', 'new', state), truth)
+      assert.equal(defectBelief('new', state), state.found ? 1 : believedRisk('new', state.level))
+    }
+    if (state.found) assert.equal(truth, true)
+    caught += Number(state.found)
+    missed += Number(truth && !state.found)
+    wasted += Number(!truth)
+    const fixed = { ...state, fixed: true }
+    assert.equal(defectInFlight(seed, 'link', 'new', fixed), false)
+    assert.equal(defectBelief('new', fixed), 0)
+  }
+  // All four cases happen: bad news, a miss by even the deepest test, and tests that only confirm.
+  assert.ok(caught > 300 && missed > 0 && wasted > 500)
+  // A shallow test misses far more often.
+  const shallow = seeds.slice(0, 1000).filter(seed => hasDefect(seed, 'link', 'new') && testResult(seed, 'link', 'new', 1) === 'passed').length
+  assert.ok(shallow > missed * 5)
 })
 
 test('a hidden value stays inside every range shown, and the range narrows to the value itself', () => {
@@ -84,55 +132,40 @@ test('a hidden value stays inside every range shown, and the range narrows to th
     }
     assert.deepEqual(previous, { min: value, max: value })
   }
-  const counts = new Map<number, number>()
-  for (const seed of seeds) { const value = hiddenValue(seed, 'lift', range); counts.set(value, (counts.get(value) ?? 0) + 1) }
-  assert.equal(counts.size, 21)
+  assert.equal(new Set(seeds.map(seed => hiddenValue(seed, 'lift', range))).size, 21)
 })
 
-test('the risk shown for a hidden value matches how often it fails', () => {
+test('the belief shown for a hidden value matches how often it is in fact over the limit', () => {
   const range = { min: 0, max: 20 }
   assert.equal(exceedChance(range, 20), 0)
   assert.equal(exceedChance(range, -1), 1)
   assert.equal(exceedChance({ min: 4, max: 7 }, 5), 0.5)
-  assert.equal(hiddenRisk(range, 20), riskFloor)
-  assert.equal(hiddenRisk(range, -1), 1)
   for (const level of [0, 1, 2, 3]) {
     let shown = 0
-    let failed = 0
+    let over = 0
     for (const seed of seeds) {
       const value = hiddenValue(seed, 'lift', range)
-      const roll = rollHidden(seed, 'lift', knownRange(range, value, level), value, 8)
-      shown += roll.risk
-      failed += Number(roll.failed)
-      assert.ok(roll.risk >= riskFloor)
-      if (value > 8) assert.equal(roll.failed, true)
+      const belief = exceedChance(knownRange(range, value, level), 8)
+      shown += belief
+      over += Number(value > 8)
+      if (level === 3) assert.equal(belief, Number(value > 8))
     }
-    assert.ok(Math.abs(shown - failed) / seeds.length < 0.025, `level ${level}: shown ${shown / seeds.length}, failed ${failed / seeds.length}`)
+    close(shown / seeds.length, over / seeds.length, 0.025, `level ${level}`)
   }
 })
 
 test('mission odds weigh every combination of failures', () => {
   assert.deepEqual(missionOdds([]), { minimum: 1, noFatal: 1 })
   const two = missionOdds([{ id: 'a', risk: 0.2, severity: 'degraded' }, { id: 'b', risk: 0.2, severity: 'degraded' }])
-  assert.ok(Math.abs(two.minimum - 0.64) < 1e-9)
+  close(two.minimum, 0.64, 1e-9)
   assert.equal(two.noFatal, 1)
-
   const items = [
     { id: 'transfer', risk: 0.1, severity: 'fatal' }, { id: 'landing', risk: 0.4, severity: 'degraded' }, { id: 'surface', risk: 0.2, severity: 'degraded' },
   ] as const
-  // The minimum survives one degraded failure but not both.
   const odds = missionOdds(items, failed => !(failed.has('landing') && failed.has('surface')))
-  assert.ok(Math.abs(odds.noFatal - 0.9) < 1e-9)
-  assert.ok(Math.abs(odds.minimum - 0.9 * (1 - 0.4 * 0.2)) < 1e-9)
-  // A failed fatal item ends the mission whatever the callback says.
-  assert.ok(Math.abs(missionOdds(items, () => true).minimum - 0.9) < 1e-9)
-
-  let met = 0
-  for (const seed of seeds) {
-    const failed = new Set(items.filter(item => rollItem(seed, item.id, item.risk).failed).map(item => item.id))
-    met += Number(!failed.has('transfer') && !(failed.has('landing') && failed.has('surface')))
-  }
-  assert.ok(Math.abs(met / seeds.length - odds.minimum) < 0.025)
+  close(odds.noFatal, 0.9, 1e-9)
+  close(odds.minimum, 0.9 * (1 - 0.4 * 0.2), 1e-9)
+  close(missionOdds(items, () => true).minimum, 0.9, 1e-9, 'a failed fatal item ends the mission whatever the callback says')
 })
 
 test('event draws use the seed and ignore verification', () => {

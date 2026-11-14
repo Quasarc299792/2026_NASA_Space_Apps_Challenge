@@ -1,7 +1,7 @@
 import type { Message } from '../i18n/en'
 import {
-  hiddenRisk, hiddenValue, knownRange, missionOdds, residualRiskAt, reviewRiskThreshold, rollHidden, rollItem, topLevel,
-  type Maturity, type Range, type Roll, type Severity,
+  defectBelief, defectInFlight, exceedChance, hiddenValue, knownRange, missionOdds, reviewRiskThreshold, testResult, topLevel, untested, verifyDefect,
+  type DefectState, type Maturity, type Outcome, type Range, type Severity,
 } from '../game/risk'
 
 type Text = { label: Message; description: Message }
@@ -15,7 +15,8 @@ type OrbitalShape = {
   telemetry: Record<string, Text & { massKg: number; diagnosticUnits: number; cost: number }>
   adapters: Record<string, Text & { massKg: number; cost: number }>
   grounds: Record<string, Text & { capacity: number; degradedCapacity: number; cost: number }>
-  risks: Record<string, Text & { failure: Message; kind: 'hidden' | 'chance'; severity: Severity; segment: string; steps: readonly [string, string, string] }>
+  risks: Record<string, Text & { failure: Message; kind: 'value' | 'defect'; severity: Severity; segment: string; steps: readonly [string, string, string] }>
+  fixes: Record<string, Work & { description: Message }>
   requires: Record<string, string>
   labSlot: { label: Message; description: Message; from: string; expiresWeek: number; uses: Record<string, { label: Message; creditsSaved: number }> }
   records: Record<string, { label: Message; description: Message }>
@@ -65,12 +66,18 @@ export const orbitalLaunch = {
     dual: { label: 'orbitalGroundDual', description: 'orbitalGroundDualDetail', capacity: 6, degradedCapacity: 3, cost: 16 },
   },
 
-  // Risk items. steps are the works that raise the item to analysis, unit test and end-to-end test, in that order.
-  // lift is a hidden value and the chapter's only fatal item. link is a chance of failure and only degrades the pass.
-  // The link counts as a new design when the diagnostics package or a second station is in the chain.
+  // Risk items. Each truth is drawn from the seed at the start. steps are the works that verify the item by analysis,
+  // unit test and end-to-end test, in that order. Verification never changes the truth, only what the player knows.
+  // lift is a hidden value and the chapter's only fatal item. link either has a defect or not, and a defect only
+  // degrades the pass. The link counts as a new design when the diagnostics package or a second station is in the chain.
   risks: {
-    lift: { label: 'orbitalRiskLift', description: 'orbitalRiskLiftDetail', failure: 'orbitalRiskLiftFailure', kind: 'hidden', severity: 'fatal', segment: 'ascent', steps: ['trade', 'engineTest', 'hotfire'] },
-    link: { label: 'orbitalRiskLink', description: 'orbitalRiskLinkDetail', failure: 'orbitalRiskLinkFailure', kind: 'chance', severity: 'degraded', segment: 'pass', steps: ['linkAnalysis', 'stationTest', 'rehearse'] },
+    lift: { label: 'orbitalRiskLift', description: 'orbitalRiskLiftDetail', failure: 'orbitalRiskLiftFailure', kind: 'value', severity: 'fatal', segment: 'ascent', steps: ['trade', 'engineTest', 'hotfire'] },
+    link: { label: 'orbitalRiskLink', description: 'orbitalRiskLinkDetail', failure: 'orbitalRiskLinkFailure', kind: 'defect', severity: 'degraded', segment: 'pass', steps: ['linkAnalysis', 'stationTest', 'rehearse'] },
+  },
+  // What a found defect costs to fix. A fix changes the truth: the item is then clean.
+  // A lift shortfall is answered with the remedies below or by changing the design before the freeze.
+  fixes: {
+    link: { weeks: 1, credits: 6, label: 'orbitalFixLink', description: 'orbitalFixLinkDetail' },
   },
   // Unit tests need the frozen design. The hot-fire needs the built stage and the rehearsal the built avionics.
   requires: { engineTest: 'freeze', stationTest: 'freeze', hotfire: 'buildStage', rehearse: 'buildAvionics' },
@@ -124,7 +131,8 @@ export const orbitalLaunch = {
   },
 
   // PDR needs margin ≥ 0 at the low end of the known shortfall range. FRR needs current integration evidence, the same
-  // margin check, pass capacity ≥ confirmationUnits and a signed acceptance for every risk above reviewRiskThreshold.
+  // margin check, pass capacity ≥ confirmationUnits and a signed acceptance for every believed risk above
+  // reviewRiskThreshold, which includes a defect that a test found and the player chose not to fix.
   gates: {
     MDR: { work: ['assess'], pass: 'orbitalMdrPass' },
     PDR: { work: ['prelim'], pass: 'orbitalPdrPass' },
@@ -179,9 +187,11 @@ export type OrbitalDesign = {
   ground: keyof typeof orbitalLaunch.grounds
 }
 export type OrbitalRisk = keyof typeof orbitalLaunch.risks
-export type OrbitalLevels = Record<OrbitalRisk, number>
+// What the player has learned so far: the lift verification level and the state of the link item.
+export type OrbitalKnowledge = { lift: number; link: DefectState }
 export type OrbitalPlan = keyof typeof orbitalLaunch.passPlans
 export const orbitalRiskIds = Object.keys(orbitalLaunch.risks) as OrbitalRisk[]
+export const orbitalUnknown: OrbitalKnowledge = { lift: 0, link: untested }
 
 export function orbitalCarried(design: OrbitalDesign) {
   return orbitalLaunch.testPayloadKg + orbitalLaunch.telemetry[design.telemetry].massKg + orbitalLaunch.adapters[design.adapter].massKg
@@ -196,62 +206,80 @@ export function orbitalLinkMaturity(design: OrbitalDesign): Maturity {
   return design.telemetry === 'diagnostics' || design.ground === 'dual' ? 'new' : 'heritage'
 }
 
-// What the workbench shows for each risk item at the given verification levels.
-export function orbitalRisks(seed: number, design: OrbitalDesign, levels: OrbitalLevels) {
+// Each data chain is its own item with its own truth. Changing the telemetry package or the stations starts a new one.
+export function orbitalLinkId(design: OrbitalDesign) {
+  return `orbital:link:${design.telemetry}:${design.ground}`
+}
+
+export function sameOrbitalLink(a: OrbitalDesign, b: OrbitalDesign) {
+  return orbitalLinkId(a) === orbitalLinkId(b)
+}
+
+// Runs the next link verification level and returns the new state. 'found' is bad news the player has to answer.
+export function verifyOrbitalLink(seed: number, design: OrbitalDesign, state: DefectState) {
+  return verifyDefect(seed, orbitalLinkId(design), orbitalLinkMaturity(design), state)
+}
+
+// What the workbench shows for each item: the player's current belief, not the truth.
+export function orbitalRisks(seed: number, design: OrbitalDesign, known: OrbitalKnowledge) {
   const stage = orbitalLaunch.stages[design.stage]
   const limit = stage.capacityKg - orbitalCarried(design)
-  const known = knownRange(stage.shortfallKg, orbitalShortfall(seed, design.stage), levels.lift)
+  const range = knownRange(stage.shortfallKg, orbitalShortfall(seed, design.stage), known.lift)
   const maturity = orbitalLinkMaturity(design)
   return {
-    lift: { id: 'lift', level: levels.lift, maturity: stage.maturity as Maturity, severity: orbitalLaunch.risks.lift.severity, known, limit, risk: hiddenRisk(known, limit) },
-    link: { id: 'link', level: levels.link, maturity, severity: orbitalLaunch.risks.link.severity, risk: residualRiskAt(maturity, levels.link) },
+    lift: { id: 'lift', level: known.lift, maturity: stage.maturity as Maturity, severity: orbitalLaunch.risks.lift.severity, known: range, limit, risk: exceedChance(range, limit) },
+    link: { id: 'link', level: known.link.level, maturity, severity: orbitalLaunch.risks.link.severity, found: known.link.found, fixed: known.link.fixed, risk: defectBelief(maturity, known.link) },
   } as const
 }
 
 // Margin at the low end of the known range. Negative means the stack is known to be too heavy.
-export function orbitalBestMargin(seed: number, design: OrbitalDesign, levels: OrbitalLevels) {
-  const { known, limit } = orbitalRisks(seed, design, levels).lift
-  return limit - known.min
+export function orbitalBestMargin(seed: number, design: OrbitalDesign, known: OrbitalKnowledge) {
+  const { known: range, limit } = orbitalRisks(seed, design, known).lift
+  return limit - range.min
 }
 
-// The forecast assumes orbit confirmation is sent first.
-export function orbitalOdds(seed: number, design: OrbitalDesign, levels: OrbitalLevels) {
+// The forecast is built from the player's beliefs and assumes orbit confirmation is sent first.
+export function orbitalOdds(seed: number, design: OrbitalDesign, known: OrbitalKnowledge) {
   const ground = orbitalLaunch.grounds[design.ground]
-  return missionOdds(Object.values(orbitalRisks(seed, design, levels)), failed =>
+  return missionOdds(Object.values(orbitalRisks(seed, design, known)), failed =>
     (failed.has('link') ? ground.degradedCapacity : ground.capacity) >= orbitalLaunch.confirmationUnits)
 }
 
-// The next verification step for an item, the risk it would leave and, for lift, the range it would show.
-// For lift this reads the true value, so it belongs in the debrief and not on the workbench. null at the top level.
-export function orbitalNextStep(seed: number, design: OrbitalDesign, levels: OrbitalLevels, id: OrbitalRisk) {
-  if (levels[id] >= topLevel) return null
-  const work = orbitalLaunch.risks[id].steps[levels[id]] as keyof typeof orbitalLaunch.costs
+// For the debrief: the next verification step for an item and what it would have told the player.
+// It reads the truth, so it must not be shown on the workbench. null at the top level or once a defect is found.
+export function orbitalNextStep(seed: number, design: OrbitalDesign, known: OrbitalKnowledge, id: OrbitalRisk) {
+  const level = id === 'lift' ? known.lift : known.link.level
+  if (level >= topLevel || (id === 'link' && (known.link.found || known.link.fixed))) return null
+  const work = orbitalLaunch.risks[id].steps[level] as keyof typeof orbitalLaunch.costs
   const { weeks, credits } = orbitalLaunch.costs[work]
-  const next = orbitalRisks(seed, design, { ...levels, [id]: levels[id] + 1 })
-  return { work, weeks, credits, risk: next[id].risk, known: id === 'lift' ? next.lift.known : null }
+  if (id === 'link') return { work, weeks, credits, found: testResult(seed, orbitalLinkId(design), orbitalLinkMaturity(design), level + 1) === 'found', known: null }
+  const next = orbitalRisks(seed, design, { ...known, lift: level + 1 }).lift
+  return { work, weeks, credits, found: next.risk === 1, known: next.known }
 }
 
 // Items the player has to sign for at flight review.
-export function orbitalAcceptance(seed: number, design: OrbitalDesign, levels: OrbitalLevels) {
-  const risks = orbitalRisks(seed, design, levels)
+export function orbitalAcceptance(seed: number, design: OrbitalDesign, known: OrbitalKnowledge) {
+  const risks = orbitalRisks(seed, design, known)
   return orbitalRiskIds.filter(id => risks[id].risk > reviewRiskThreshold)
 }
 
-export function flyOrbital(seed: number, design: OrbitalDesign, levels: OrbitalLevels, plan: OrbitalPlan) {
-  const risks = orbitalRisks(seed, design, levels)
+// Nothing is rolled here. The flight plays out the truths drawn at the start of the run.
+export function flyOrbital(seed: number, design: OrbitalDesign, known: OrbitalKnowledge, plan: OrbitalPlan) {
+  const risks = orbitalRisks(seed, design, known)
   const shortfall = orbitalShortfall(seed, design.stage)
   const marginKg = risks.lift.limit - shortfall
-  const rolls: Roll[] = [{ ...rollHidden(seed, 'orbital:lift', risks.lift.known, shortfall, risks.lift.limit), id: 'lift' }]
-  const flown = { rolls, marginKg, marginProven: false, capacity: 0, confirmation: 0, diagnostics: 0 }
-  if (rolls[0].failed) return { ...flown, outcome: 'incomplete', stop: 'ascent' } as const
-  rolls.push({ ...rollItem(seed, 'orbital:link', risks.link.risk), id: 'link' })
+  const outcomes: Outcome[] = [{ id: 'lift', believed: risks.lift.risk, failed: marginKg < 0, value: shortfall, limit: risks.lift.limit }]
+  const flown = { outcomes, marginKg, marginProven: false, capacity: 0, confirmation: 0, diagnostics: 0 }
+  if (marginKg < 0) return { ...flown, outcome: 'incomplete', stop: 'ascent' } as const
+  const defect = defectInFlight(seed, orbitalLinkId(design), risks.link.maturity, known.link)
+  outcomes.push({ id: 'link', believed: risks.link.risk, failed: defect })
   const ground = orbitalLaunch.grounds[design.ground]
-  const capacity = rolls[1].failed ? ground.degradedCapacity : ground.capacity
+  const capacity = defect ? ground.degradedCapacity : ground.capacity
   const available = orbitalLaunch.telemetry[design.telemetry].diagnosticUnits
   const first = orbitalLaunch.passPlans[plan].diagnosticsFirst
   const diagnostics = Math.min(available, first ? capacity : Math.max(0, capacity - orbitalLaunch.confirmationUnits))
   const confirmation = Math.min(orbitalLaunch.confirmationUnits, capacity - (first ? diagnostics : 0))
-  const marginProven = levels.lift >= topLevel && marginKg >= orbitalLaunch.marginStretchKg
+  const marginProven = known.lift >= topLevel && marginKg >= orbitalLaunch.marginStretchKg
   const passed = { ...flown, marginProven, capacity, confirmation, diagnostics }
   if (confirmation < orbitalLaunch.confirmationUnits) return { ...passed, outcome: 'incomplete', stop: 'pass' } as const
   return { ...passed, outcome: marginProven || (available > 0 && diagnostics === available) ? 'extra' : 'success', stop: '' } as const

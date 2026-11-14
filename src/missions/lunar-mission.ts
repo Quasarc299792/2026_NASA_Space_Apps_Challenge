@@ -1,7 +1,7 @@
 import type { Message } from '../i18n/en'
 import {
-  hiddenRisk, hiddenValue, knownRange, missionOdds, residualRiskAt, reviewRiskThreshold, rollHidden, rollItem, topLevel,
-  type Maturity, type Range, type Roll, type Severity,
+  defectBelief, defectInFlight, exceedChance, hiddenValue, knownRange, missionOdds, reviewRiskThreshold, testResult, topLevel, untested, verifyDefect,
+  type DefectState, type Maturity, type Outcome, type Range, type Severity,
 } from '../game/risk'
 
 type Text = { label: Message; description: Message }
@@ -16,7 +16,8 @@ type LunarShape = {
   powers: Record<string, Text & { massKg: number; nightWindows: number; cost: number }>
   routes: Record<string, Text & { propellantKg: number; correctionKg: Range; maturity: Maturity; leadWeeks: number; cost: number }>
   mounts: Record<string, Text & { interfaceKg: Range; cost: number; supportSlots: number }>
-  risks: Record<string, Text & { failure: Message; kind: 'hidden' | 'chance'; severity: Severity; segment: string; steps: readonly [string, string, string] }>
+  risks: Record<string, Text & { failure: Message; kind: 'value' | 'defect'; severity: Severity; segment: string; steps: readonly [string, string, string] }>
+  fixes: Record<string, Work & { description: Message }>
   requires: Record<string, string>
   partnerships: Record<string, Text & { weeks: number; advance: number; milestone: number; supportSlots: number; record: string | null }>
   records: Record<string, { label: Message; from: string; partnership: string; advanceShift: number; supportSlots: number }>
@@ -44,7 +45,7 @@ export const lunarMission = {
 
   // Mass budget. Propellant loaded = launchAllocationKg − dry mass, so every kilogram of dry mass costs a kilogram of propellant.
   launchAllocationKg: 500,
-  busDryKg: 190,
+  busDryKg: 184,
 
   // Surface timeline, counted in operations windows across one lunar day.
   daylightWindows: 4,
@@ -65,25 +66,33 @@ export const lunarMission = {
     extended: { label: 'lunarPowerExtended', description: 'lunarPowerExtendedDetail', massKg: 12, nightWindows: 2, cost: 16 },
   },
   routes: {
-    direct: { label: 'lunarRouteDirect', description: 'lunarRouteDirectDetail', propellantKg: 270, correctionKg: { min: 4, max: 11 }, maturity: 'heritage', leadWeeks: 0, cost: 0 },
-    lowEnergy: { label: 'lunarRouteLowEnergy', description: 'lunarRouteLowEnergyDetail', propellantKg: 252, correctionKg: { min: 2, max: 13 }, maturity: 'new', leadWeeks: 2, cost: 6 },
+    direct: { label: 'lunarRouteDirect', description: 'lunarRouteDirectDetail', propellantKg: 270, correctionKg: { min: 0, max: 19 }, maturity: 'heritage', leadWeeks: 0, cost: 0 },
+    lowEnergy: { label: 'lunarRouteLowEnergy', description: 'lunarRouteLowEnergyDetail', propellantKg: 252, correctionKg: { min: 0, max: 25 }, maturity: 'new', leadWeeks: 2, cost: 6 },
   },
   // interfaceKg is the range of as-built mass the payload interface adds. The true value is hidden: the trade study
   // halves the range and the integration weighing reveals it. The lightweight mount is paid for with credits or with
   // one partner support slot.
   mounts: {
-    standard: { label: 'lunarMountStandard', description: 'lunarMountStandardDetail', interfaceKg: { min: 4, max: 15 }, cost: 0, supportSlots: 0 },
+    standard: { label: 'lunarMountStandard', description: 'lunarMountStandardDetail', interfaceKg: { min: 10, max: 20 }, cost: 0, supportSlots: 0 },
     lightweight: { label: 'lunarMountLightweight', description: 'lunarMountLightweightDetail', interfaceKg: { min: 1, max: 4 }, cost: 16, supportSlots: 1 },
   },
 
-  // Flight risk items. steps are the works that raise the item to analysis, unit test and end-to-end test, in order.
-  // correction is a hidden value: fatal when the transfer needs more than the propellant margin. landing is fatal with
-  // a single sensor and a tilted landing with the backup. surface costs surfaceLossWindows operations windows.
-  // The landing is always a new design. The surface item follows the payload and the correction follows the route.
+  // Flight risk items. Each truth is drawn from the seed at the start. steps are the works that verify the item by
+  // analysis, unit test and end-to-end test, in order. Verification never changes the truth, only what the player knows.
+  // correction is a hidden value: fatal when the transfer needs more than the propellant margin. landing and surface
+  // either have a defect or not. A landing defect is fatal with a single sensor and a tilted landing with the backup.
+  // A surface defect costs surfaceLossWindows operations windows. The landing is always a new design.
+  // The surface item follows the payload and the correction follows the route.
   risks: {
-    correction: { label: 'lunarRiskCorrection', description: 'lunarRiskCorrectionDetail', failure: 'lunarRiskCorrectionFailure', kind: 'hidden', severity: 'fatal', segment: 'transfer', steps: ['navAnalysis', 'thrusterTest', 'navRehearsal'] },
-    landing: { label: 'lunarRiskLanding', description: 'lunarRiskLandingDetail', failure: 'lunarRiskLandingFailure', kind: 'chance', severity: 'fatal', segment: 'landing', steps: ['descentSim', 'sensorTest', 'rehearse'] },
-    surface: { label: 'lunarRiskSurface', description: 'lunarRiskSurfaceDetail', failure: 'lunarRiskSurfaceFailure', kind: 'chance', severity: 'degraded', segment: 'surface', steps: ['thermalAnalysis', 'thermalTest', 'dayRehearsal'] },
+    correction: { label: 'lunarRiskCorrection', description: 'lunarRiskCorrectionDetail', failure: 'lunarRiskCorrectionFailure', kind: 'value', severity: 'fatal', segment: 'transfer', steps: ['navAnalysis', 'thrusterTest', 'navRehearsal'] },
+    landing: { label: 'lunarRiskLanding', description: 'lunarRiskLandingDetail', failure: 'lunarRiskLandingFailure', kind: 'defect', severity: 'fatal', segment: 'landing', steps: ['descentSim', 'sensorTest', 'rehearse'] },
+    surface: { label: 'lunarRiskSurface', description: 'lunarRiskSurfaceDetail', failure: 'lunarRiskSurfaceFailure', kind: 'defect', severity: 'degraded', segment: 'surface', steps: ['thermalAnalysis', 'thermalTest', 'dayRehearsal'] },
+  },
+  // What a found defect costs to fix. A fix changes the truth: the item is then clean.
+  // A correction need above the reserve is answered with the remedies below or by changing the design before the freeze.
+  fixes: {
+    landing: { weeks: 1, credits: 6, label: 'lunarFixLanding', description: 'lunarFixLandingDetail' },
+    surface: { weeks: 1, credits: 6, label: 'lunarFixSurface', description: 'lunarFixSurfaceDetail' },
   },
   // Unit tests need the frozen design. End-to-end tests need the built lander, or the ground system for the surface day.
   requires: { thrusterTest: 'freeze', sensorTest: 'freeze', thermalTest: 'freeze', navRehearsal: 'buildFlight', rehearse: 'buildFlight', dayRehearsal: 'buildGround' },
@@ -146,7 +155,8 @@ export const lunarMission = {
 
   // PDR needs the best-case margin (low end of the interface range) to cover the low end of the correction range.
   // FRR needs current integration evidence, a delivered contract, the weighed margin covering the low end of the
-  // correction range, and a signed acceptance for every flight risk above reviewRiskThreshold.
+  // correction range, and a signed acceptance for every believed risk above reviewRiskThreshold, which includes a
+  // defect that a test found and the player chose not to fix.
   gates: {
     MDR: { work: ['assess'], pass: 'lunarMdrPass' },
     PDR: { work: ['prelim'], pass: 'lunarPdrPass' },
@@ -208,11 +218,13 @@ export type LunarDesign = {
   mount: keyof typeof lunarMission.mounts
 }
 export type LunarRisk = keyof typeof lunarMission.risks
-export type LunarLevels = Record<LunarRisk, number>
+export type LunarDefect = keyof typeof lunarMission.fixes
 export type LunarPlan = keyof typeof lunarMission.surfacePlans
-// interface: 0 before the trade study, 1 after it, topLevel once the assembled spacecraft has been weighed.
-export type LunarKnowledge = LunarLevels & { interface: number }
+// What the player has learned so far. interface: 0 before the trade study, 1 after it, topLevel once the assembled
+// spacecraft has been weighed. correction: the verification level reached.
+export type LunarKnowledge = { interface: number; correction: number; landing: DefectState; surface: DefectState }
 export const lunarRiskIds = Object.keys(lunarMission.risks) as LunarRisk[]
+export const lunarUnknown: LunarKnowledge = { interface: 0, correction: 0, landing: untested, surface: untested }
 
 // True values fixed by the seed. Each mount and each route has its own.
 export function lunarInterface(seed: number, mount: LunarDesign['mount']) {
@@ -220,6 +232,19 @@ export function lunarInterface(seed: number, mount: LunarDesign['mount']) {
 }
 export function lunarCorrection(seed: number, route: LunarDesign['route']) {
   return hiddenValue(seed, `lunar:correction:${route}`, lunarMission.routes[route].correctionKg)
+}
+
+// Each sensor set and each payload is its own item with its own truth.
+export function lunarDefectItem(design: LunarDesign, id: LunarDefect) {
+  return id === 'landing'
+    ? { item: `lunar:landing:${design.sensor}`, maturity: 'new' as Maturity }
+    : { item: `lunar:surface:${design.payload}`, maturity: lunarMission.payloads[design.payload].maturity as Maturity }
+}
+
+// Runs the next verification level on a defect item and returns the new state.
+export function verifyLunar(seed: number, design: LunarDesign, id: LunarDefect, state: DefectState) {
+  const { item, maturity } = lunarDefectItem(design, id)
+  return verifyDefect(seed, item, maturity, state)
 }
 
 // Propellant margin for a given interface mass.
@@ -234,19 +259,20 @@ export function lunarInterfaceKnown(seed: number, design: LunarDesign, known: Lu
   return knownRange(lunarMission.mounts[design.mount].interfaceKg, lunarInterface(seed, design.mount), known.interface)
 }
 
-// What the workbench shows. Before the weighing the correction risk is averaged over the interface range still open.
+// What the workbench shows for each item: the player's current belief, not the truth.
+// Before the weighing, the correction belief is averaged over the interface range still open.
 export function lunarRisks(seed: number, design: LunarDesign, known: LunarKnowledge) {
   const route = lunarMission.routes[design.route]
   const iface = lunarInterfaceKnown(seed, design, known)
   const correction = knownRange(route.correctionKg, lunarCorrection(seed, design.route), known.correction)
   let risk = 0
-  for (let kg = iface.min; kg <= iface.max; kg += 1) risk += hiddenRisk(correction, lunarMargin(design, kg).margin) / (iface.max - iface.min + 1)
+  for (let kg = iface.min; kg <= iface.max; kg += 1) risk += exceedChance(correction, lunarMargin(design, kg).margin) / (iface.max - iface.min + 1)
   const backup = lunarMission.sensors[design.sensor].backup
-  const surface = lunarMission.payloads[design.payload].maturity as Maturity
+  const surface = lunarDefectItem(design, 'surface').maturity
   return {
     correction: { id: 'correction', level: known.correction, maturity: route.maturity as Maturity, severity: 'fatal' as Severity, known: correction, limit: lunarMargin(design, iface.max).margin, risk },
-    landing: { id: 'landing', level: known.landing, maturity: 'new' as Maturity, severity: (backup ? 'degraded' : 'fatal') as Severity, risk: residualRiskAt('new', known.landing) },
-    surface: { id: 'surface', level: known.surface, maturity: surface, severity: 'degraded' as Severity, risk: residualRiskAt(surface, known.surface) },
+    landing: { id: 'landing', level: known.landing.level, maturity: 'new' as Maturity, severity: (backup ? 'degraded' : 'fatal') as Severity, found: known.landing.found, fixed: known.landing.fixed, risk: defectBelief('new', known.landing) },
+    surface: { id: 'surface', level: known.surface.level, maturity: surface, severity: 'degraded' as Severity, found: known.surface.found, fixed: known.surface.fixed, risk: defectBelief(surface, known.surface) },
   }
 }
 
@@ -264,38 +290,48 @@ export function lunarBatches(design: LunarDesign, plan: LunarPlan, failed: Reado
   return { windows: Math.max(0, windows), batches: lunarMission.surfacePlans[plan].deliverAll ? batches : Math.min(batches, lunarMission.minimumBatches) }
 }
 
-// The forecast assumes every surface window goes to science.
+// The forecast is built from the player's beliefs and assumes every surface window goes to science.
 export function lunarOdds(seed: number, design: LunarDesign, known: LunarKnowledge) {
   return missionOdds(Object.values(lunarRisks(seed, design, known)), failed => lunarBatches(design, 'extra', failed).batches >= lunarMission.minimumBatches)
 }
 
+// Items the player has to sign for at flight review.
 export function lunarAcceptance(seed: number, design: LunarDesign, known: LunarKnowledge) {
   const risks = lunarRisks(seed, design, known)
   return lunarRiskIds.filter(id => risks[id].risk > reviewRiskThreshold)
 }
 
-// The next verification step for a flight risk and what it would leave. Reads true values: debrief only.
+// For the debrief: the next verification step for an item and what it would have told the player.
+// It reads the truth, so it must not be shown on the workbench. null at the top level or once a defect is found.
 export function lunarNextStep(seed: number, design: LunarDesign, known: LunarKnowledge, id: LunarRisk) {
-  if (known[id] >= topLevel) return null
-  const work = lunarMission.risks[id].steps[known[id]] as keyof typeof lunarMission.costs
+  const state = id === 'correction' ? null : known[id]
+  const level = state ? state.level : known.correction
+  if (level >= topLevel || state?.found || state?.fixed) return null
+  const work = lunarMission.risks[id].steps[level] as keyof typeof lunarMission.costs
   const { weeks, credits } = lunarMission.costs[work]
-  const next = lunarRisks(seed, design, { ...known, [id]: known[id] + 1 })
-  return { work, weeks, credits, risk: next[id].risk, known: id === 'correction' ? next.correction.known : null }
+  if (id !== 'correction') {
+    const { item, maturity } = lunarDefectItem(design, id)
+    return { work, weeks, credits, found: testResult(seed, item, maturity, level + 1) === 'found', known: null }
+  }
+  const next = lunarRisks(seed, design, { ...known, correction: level + 1 }).correction
+  return { work, weeks, credits, found: next.risk === 1, known: next.known }
 }
 
+// Nothing is rolled here. The flight plays out the truths drawn at the start of the run.
 export function flyLunar(seed: number, design: LunarDesign, known: LunarKnowledge, plan: LunarPlan) {
   const risks = lunarRisks(seed, design, known)
   const margin = lunarMargin(design, lunarInterface(seed, design.mount)).margin
   const correction = lunarCorrection(seed, design.route)
-  const rolls: Roll[] = [{ ...rollHidden(seed, 'lunar:correction', risks.correction.known, correction, margin), id: 'correction', risk: risks.correction.risk }]
-  const lost = (stop: string) => ({ rolls, margin, correction, tilted: false, windows: 0, delivered: 0, outcome: 'lost', stop }) as const
-  if (rolls[0].failed) return lost('transfer')
-  rolls.push({ ...rollItem(seed, 'lunar:landing', risks.landing.risk), id: 'landing' })
-  const tilted = rolls[1].failed
+  const outcomes: Outcome[] = [{ id: 'correction', believed: risks.correction.risk, failed: correction > margin, value: correction, limit: margin }]
+  const lost = (stop: string) => ({ outcomes, margin, correction, tilted: false, windows: 0, delivered: 0, outcome: 'lost', stop }) as const
+  if (correction > margin) return lost('transfer')
+  const defective = (id: LunarDefect) => { const { item, maturity } = lunarDefectItem(design, id); return defectInFlight(seed, item, maturity, known[id]) }
+  const tilted = defective('landing')
+  outcomes.push({ id: 'landing', believed: risks.landing.risk, failed: tilted })
   if (tilted && !lunarMission.sensors[design.sensor].backup) return lost('landing')
-  rolls.push({ ...rollItem(seed, 'lunar:surface', risks.surface.risk), id: 'surface' })
-  const failed = new Set(rolls.filter(roll => roll.failed).map(roll => roll.id))
+  outcomes.push({ id: 'surface', believed: risks.surface.risk, failed: defective('surface') })
+  const failed = new Set(outcomes.filter(item => item.failed).map(item => item.id))
   const { windows, batches } = lunarBatches(design, plan, failed)
   const outcome = batches >= lunarMission.stretchBatches ? 'extra' : batches >= lunarMission.minimumBatches ? 'success' : 'noData'
-  return { rolls, margin, correction, tilted, windows, delivered: batches, outcome, stop: '' } as const
+  return { outcomes, margin, correction, tilted, windows, delivered: batches, outcome, stop: '' } as const
 }
