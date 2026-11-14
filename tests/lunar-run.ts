@@ -1,6 +1,6 @@
 import { defectBelief, verifyDefect } from '../src/game/risk'
 import {
-  flyLunar, lunarAcceptance, lunarDevCards, lunarFlightRisks, lunarItemId, lunarMass, lunarMaturity, lunarMission as mission, lunarUntested,
+  flyLunar, lunarAcceptance, lunarDevDeck, lunarFlightRisks, lunarItemId, lunarMass, lunarMaturity, lunarMission as mission, lunarUntested,
   type LunarDesign, type LunarPick, type LunarRisk,
 } from '../src/missions/lunar-mission'
 
@@ -31,7 +31,8 @@ export const cautious: LunarPick = (prompt, options) => {
 export function start(seed: number, partnership: Partnership = 'decline', policy: Policy = {}) {
   const design: LunarDesign = { ...mission.initialDesign }
   const states = lunarUntested()
-  const cards = lunarDevCards(seed)
+  const deck = lunarDevDeck(seed)
+  const queue: CardId[] = [...deck.order]
   const done = new Set<string>()
   const events: { week: number; card: string; choice: string | null }[] = []
   const ledger: string[] = []
@@ -78,8 +79,8 @@ export function start(seed: number, partnership: Partnership = 'decline', policy
     events.push({ week, card, choice })
     return choice
   }
-  function draw(card: CardId) {
-    const skip = () => { events.push({ week, card, choice: null }) }
+  function draw(card: CardId): boolean {
+    const skip = () => false
     if (card === 'PullIn') {
       const choice = choose(card, credits >= 10 ? ['Accept', 'Compromise', 'Refuse'] : ['Accept', 'Compromise'])
       if (choice === 'Accept') { deadline -= 2; gain(12) } else if (choice === 'Compromise') deadline -= 1
@@ -124,11 +125,13 @@ export function start(seed: number, partnership: Partnership = 'decline', policy
       if (choice === 'Funding') sign('funding', true); else if (choice === 'Tech') sign('tech', true)
       else if (choice === 'Government') { gain(30); extraKg += 8; second = true; interfaceDue = true }
     }
+    return true
   }
   function tick() {
     week += 1
     const slot = (mission.drawWeeks as readonly number[]).indexOf(week)
-    if (slot >= 0 && !stop) draw(cards[slot])
+    if (slot === deck.pullInSlot && !stop) draw('PullIn')
+    else if (slot >= 0 && !stop) while (queue.length && draw(queue.shift()!) === false);
     if (week === mission.secondOfferWeek && !stop && (!contract || contract.ended)) draw('SecondOffer')
   }
   // Starts a piece of work: refuses it after the deadline week or without the credits, then pays up front.
@@ -234,6 +237,7 @@ export function start(seed: number, partnership: Partnership = 'decline', policy
       return { outcome: 'stopped' as const, closing: (stop || 'deadline') as 'deadline' | 'funds' | 'cancelled' }
     },
   }
+  if (partnership !== 'decline') sign(partnership)
   return run
 }
 export type Run = ReturnType<typeof start>

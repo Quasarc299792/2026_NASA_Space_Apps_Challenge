@@ -1,489 +1,200 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { hasDefect, percent, topLevel, untested } from '../src/game/risk'
+import { believedRisk, hasDefect, reviewRiskThreshold } from '../src/game/risk'
 import { en } from '../src/i18n/en'
 import { zhTW } from '../src/i18n/zh-TW'
 import {
-  flyLunar, lunarAcceptance, lunarBestMargin, lunarCorrection, lunarDefectItem, lunarInterface, lunarInterfaceKnown, lunarMargin, lunarMission as mission,
-  lunarNextStep, lunarOdds, lunarProposals, lunarRiskIds, lunarRisks, verifyLunar,
-  type LunarDefect as Defect, type LunarDesign as Design, type LunarKnowledge, type LunarPlan as Plan, type LunarRisk as Risk,
+  flyLunar, lunarAcceptance, lunarDevDeck, lunarFlightCards, lunarItemId, lunarMass, lunarMaturity, lunarMission as mission, lunarOdds,
+  lunarProposals, lunarRiskIds, lunarSeverity, lunarUntested, type LunarDesign,
 } from '../src/missions/lunar-mission'
+import { cautious, start } from './lunar-run'
+import { picks, playRoute, strategies, summary } from './lunar-strategies'
 
-// Route checks for docs/story/lunar-mission.md. The lunar chapter is not wired into src/game/mission.ts yet.
-// The risk rules live in src/missions/lunar-mission.ts. This file adds the calendar, budget and partnership rules
-// written in that document and replays routes with fixed seeds.
+// Checks for docs/story/lunar-mission.md. The lunar chapter is not wired into src/game/mission.ts yet, so the
+// development phase is replayed by tests/lunar-run.ts and the flight by flyLunar in the mission file.
 
-type Partnership = keyof typeof mission.partnerships
-type WorkId = keyof typeof mission.costs
-type Remedy = keyof typeof mission.remedies
-
-const stepOf = new Map<string, { risk: Risk; level: number }>(
-  lunarRiskIds.flatMap(risk => mission.risks[risk].steps.map((work, index) => [work, { risk, level: index + 1 }] as const)))
-
-function start(seed: number) {
-  let design: Design = { ...mission.initialDesign }
-  let known: LunarKnowledge = { interface: 0, correction: 0, landing: untested, surface: untested }
-  let partnership: Partnership = 'decline'
-  let week = 0
-  let credits: number = mission.budget
-  let spent = 0
-  let deadline: number = mission.deadline
-  let contractWeeks = 0
-  let slots = 0
-  let frozen = false
-  let current = false
-  let approvedWeek = 0
-  let accepted: readonly Risk[] = []
-  let forecast = { minimum: 0, noFatal: 0 }
-  let outcome: keyof typeof mission.outcomes | undefined
-  let stop = ''
-  let flight: ReturnType<typeof flyLunar> | undefined
-  const done = new Set<WorkId>()
-  const found: string[] = []
-  const ledger: string[] = []
-  const due = () => deadline - mission.routes[design.route].leadWeeks
-
-  function spend(label: string, weeks: number, cost: number) {
-    if (cost > credits) { outcome = 'stopped'; stop = 'funds'; ledger.push(`${label}: needs ${cost}, has ${credits}`); return false }
-    credits -= cost
-    spent += cost
-    const begin = week + 1
-    for (let index = 0; index < weeks; index += 1) {
-      week += 1
-      if (week === mission.events.pullIn.afterWeek) deadline += mission.events.pullIn.deadlineChange
-    }
-    ledger.push(`W${weeks > 1 ? `${begin}–${week}` : weeks ? week : `${week}+`} ${label} −${cost} → ${credits}`)
-    return true
-  }
-
-  // A different sensor set or payload is a different item: what was learned about the old one does not carry over.
-  function redesign(next: Design) {
-    if (next.sensor !== design.sensor) known = { ...known, landing: untested }
-    if (next.payload !== design.payload) known = { ...known, surface: untested }
-    design = next
-  }
-
-  const run = {
-    get design() { return design },
-    get known() { return known },
-    get credits() { return credits },
-    get week() { return week },
-    get slots() { return slots },
-    get due() { return due() },
-    get over() { return Boolean(outcome) },
-    has: (id: WorkId) => done.has(id),
-    risks: () => lunarRisks(seed, design, known),
-    odds: () => lunarOdds(seed, design, known),
-    bestMargin: () => lunarBestMargin(seed, design, known),
-    interfaceKnown: () => lunarInterfaceKnown(seed, design, known),
-    acceptance: () => lunarAcceptance(seed, design, known),
-    nextStep: (id: Risk) => lunarNextStep(seed, design, known, id),
-    sign(choice: Partnership) {
-      partnership = choice
-      credits += mission.partnerships[choice].advance
-    },
-    configure(change: Partial<Design>) {
-      assert.equal(frozen, false, 'design choices are free only before CDR')
-      redesign({ ...design, ...change })
-    },
-    // slot: spend one support slot on this work. On the freeze it pays for the lightweight mount.
-    work(id: WorkId, slot = false) {
-      if (outcome) return false
-      let { weeks, credits: cost } = mission.costs[id] as { weeks: number; credits: number }
-      const step = stepOf.get(id)
-      if (step) {
-        const state = step.risk === 'correction' ? null : known[step.risk]
-        assert.equal(state ? state.level : known.correction, step.level - 1, `${id} is the next verification level`)
-        if (state) assert.ok(!state.found && !state.fixed, 'nothing left to learn about a defect that has been found')
-      }
-      const needs = (mission.requires as Record<string, WorkId>)[id]
-      if (needs) assert.ok(done.has(needs), `${id} needs ${needs}`)
-      if (id === 'prelim') assert.ok(run.bestMargin() >= 0, 'PDR needs a margin that can still cover the corrections')
-      if (id === 'freeze') {
-        const mount = mission.mounts[design.mount]
-        cost += mission.payloads[design.payload].cost + mission.sensors[design.sensor].cost + mission.powers[design.power].cost
-          + mission.routes[design.route].cost + (slot ? 0 : mount.cost)
-        if (slot) { assert.ok(mount.supportSlots > 0 && slots >= mount.supportSlots, 'support slot available'); slots -= mount.supportSlots }
-      } else if (slot) {
-        assert.ok(slots > 0, 'support slot available')
-        slots -= 1
-        if (id === 'buildFlight' || id === 'integrate') { weeks -= mission.supportUses[id].weeksSaved; cost -= mission.supportUses[id].creditsSaved }
-        else { assert.ok(step, 'support slots cover lander work, integration or one verification step'); cost = 0 }
-      }
-      if (!spend(id, weeks, cost)) return false
-      done.add(id)
-      if (step?.risk === 'correction') known = { ...known, correction: step.level }
-      else if (step) {
-        known = { ...known, [step.risk]: verifyLunar(seed, design, step.risk, known[step.risk]) }
-        if (known[step.risk].found) found.push(`${step.risk} by ${id}`)
-      }
-      if (id === 'contract') {
-        contractWeeks += 1
-        if (contractWeeks === mission.partnerships[partnership].weeks) {
-          credits += mission.partnerships[partnership].milestone
-          slots += mission.partnerships[partnership].supportSlots
-        }
-      }
-      if (id === 'trade') known = { ...known, interface: Math.max(known.interface, 1) }
-      if (id === 'freeze') frozen = true
-      if (id === 'integrate' || id === 'retest') { current = true; known = { ...known, interface: topLevel } }
-      return true
-    },
-    // Fixing a found defect costs time and money and makes the item clean.
-    fix(id: Defect) {
-      if (outcome) return false
-      assert.ok(known[id].found && !known[id].fixed, 'only a defect that a test found can be fixed')
-      const { weeks, credits: cost } = mission.fixes[id]
-      if (!spend(`fix ${id}`, weeks, cost)) return false
-      known = { ...known, [id]: { ...known[id], fixed: true } }
-      return true
-    },
-    remedy(id: Remedy) {
-      if (outcome) return false
-      const { weeks, credits: cost } = mission.remedies[id]
-      if (id === 'partnerMount') { assert.ok(slots > 0, 'support slot available'); slots -= 1 }
-      if (!spend(id, weeks, cost)) return false
-      // A new mount has not been weighed, and a new route has only been analyzed.
-      if (id === 'mount' || id === 'partnerMount') { design = { ...design, mount: 'lightweight' }; known = { ...known, interface: Math.min(known.interface, 1) } }
-      if (id === 'dropKit') design = { ...design, power: 'dayOnly' }
-      if (id === 'reroute') { design = { ...design, route: 'lowEnergy' }; known = { ...known, correction: Math.min(known.correction, 1) } }
-      if (id === 'basicPayload') redesign({ ...design, payload: 'basic' })
-      current = false
-      return true
-    },
-    // Returns false when the review sends the spacecraft back. Believed risks above the threshold are signed for.
-    review() {
-      if (outcome) return false
-      if (week > due()) { outcome = 'stopped'; stop = 'deadline'; return false }
-      assert.ok(mission.gates.FRR.work.every(id => done.has(id)), 'FRR work complete')
-      assert.ok(current, 'integration evidence is current')
-      assert.equal(contractWeeks, mission.partnerships[partnership].weeks, 'contract delivered')
-      if (run.bestMargin() < 0) return false
-      accepted = run.acceptance()
-      forecast = run.odds()
-      approvedWeek = week
-      return true
-    },
-    fly(plan: Plan) {
-      if (outcome) return
-      assert.ok(approvedWeek, 'FRR approved before flight')
-      flight = flyLunar(seed, design, known, plan)
-      outcome = flight.outcome
-      stop = flight.stop
-    },
-    stopNow(reason: string) { if (!outcome) { outcome = 'stopped'; stop = reason } },
-    outcomes: () => flight?.outcomes ?? [],
-    forecast: () => forecast,
-    result() {
-      const result = {
-        week, spent, credits, due: due(), outcome, stop, delivered: flight?.delivered ?? 0, approvedWeek,
-        margin: lunarMargin(design, lunarInterface(seed, design.mount)).margin,
-        flew: flight?.outcomes.map(item => `${item.id} ${percent(item.believed)}% ${item.failed ? 'failed' : 'held'}`) ?? [], found, accepted,
-        forecast: { minimum: percent(forecast.minimum), noFatal: percent(forecast.noFatal) },
-      }
-      if (process.env.LUNAR_ROUTES) console.log(ledger.join('\n'), '\n', result, '\n')
-      return result
-    },
-  }
-  return run
-}
-
-type Run = ReturnType<typeof start>
 const seeds = Array.from({ length: 2000 }, (_, index) => index + 1)
+const basic: LunarDesign = { ...mission.initialDesign }
 
-// Do each work in turn. When a test finds a defect, fix it if the run can still pay for and finish integration afterwards.
-function build(run: Run, ...ids: (WorkId | [WorkId, 'slot'])[]) {
-  for (const entry of ids) {
-    const [id, slot] = typeof entry === 'string' ? [entry, false] as const : [entry[0], true] as const
-    const step = stepOf.get(id)
-    const defect = step && step.risk !== 'correction' ? step.risk : null
-    if (defect && (run.known[defect].found || run.known[defect].fixed)) continue
-    run.work(id, slot)
-    if (defect && run.known[defect].found) {
-      const integration = run.has('integrate') ? { weeks: 0, credits: 0 } : mission.costs.integrate
-      const fix = mission.fixes[defect]
-      if (run.credits >= fix.credits + integration.credits && run.week + fix.weeks + integration.weeks <= run.due) run.fix(defect)
+// One fixed-seed route for every cell of the ending matrix: strategy, flight choices, seed and the whole run.
+const routes: readonly [string, string, number, ReturnType<typeof summary>][] = [
+  ["fundingVerify", "cautious", 7, {"week":24,"spent":208,"income":222,"credits":14,"due":24,"margin":12,"events":"4:PullIn:Accept 5:Camera:Decline 10:LauncherSlip:Keep 16:PartsAlert:Fly","levels":"software2F pressure2 thrusters0 descent1F payload2 night0","accepted":"thrusters","flight":"card:Scrub=Wait card:CruiseScience=On plan=extra | batches 1 spare 6 credits 2","ending":"success/checked"}],
+  ["declineNone", "cautious", 1, {"week":13,"spent":146,"income":162,"credits":16,"due":22,"margin":16,"events":"4:SupplierDelay:Wait 8:SecondOffer:Alone 10:PullIn:Accept","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"software,pressure,thrusters,descent,payload","flight":"card:Lightning=Check card:Eclipse=Exposed plan=extra night=rest | batches 1 spare 10 credits 16","ending":"success/unchecked"}],
+  ["techVerify", "cautious", 3, {"week":19,"spent":160,"income":162,"credits":2,"due":22,"margin":16,"events":"4:IcdMismatch:Skip 5:Review:UseSlot 10:PullIn:Accept 16:LauncherSlip:Keep","levels":"software2 pressure0 thrusters0 descent3 payload2 night0","accepted":"software,pressure,thrusters","flight":"card:Scrub=Rush Xpressure risk:pressure=Continue card:Eclipse=Exposed plan=extra | batches 1 spare 4 credits 2","ending":"success/recovered"}],
+  ["fundingSecond", "cautious", 24, {"week":24,"spent":207,"income":240,"credits":33,"due":24,"margin":8,"events":"4:PullIn:Accept 5:Camera:Decline 10:IcdMismatch:Review 16:SecondPayload:Light","levels":"software3 pressure2 thrusters0 descent1F payload2 night0","accepted":"thrusters","flight":"card:Weather=Rollback card:CruiseScience=On plan=extra night=rest | batches 1 spare 2 credits 23","ending":"extra/checked"}],
+  ["stretchNone", "cautious", 26, {"week":15,"spent":182,"income":248,"credits":66,"due":22,"margin":8,"events":"4:PullIn:Accept 5:Camera:Mount 10:SecondPayload:Light","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"software,pressure,thrusters,descent,payload","flight":"card:Scrub=Wait card:Eclipse=Exposed plan=extra night=rest | batches 1 spare 4 credits 58","ending":"extra/unchecked"}],
+  ["stretchNone", "cautious", 6, {"week":15,"spent":182,"income":248,"credits":66,"due":22,"margin":8,"events":"4:SecondPayload:Light 5:Camera:Mount 10:PullIn:Accept","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"software,pressure,thrusters,descent,payload","flight":"card:Weather=Rollback Xthrusters risk:thrusters=Simulate card:Eclipse=Exposed Xpayload risk:payload=Restart plan=extra night=rest | batches 1 spare 2 credits 54","ending":"extra/recovered"}],
+  ["declineNone", "cautious", 7, {"week":12,"spent":146,"income":162,"credits":16,"due":22,"margin":16,"events":"4:PullIn:Accept 8:SecondOffer:Alone 10:LauncherSlip:Keep","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"software,pressure,thrusters,descent,payload","flight":"card:Scrub=Wait Xsoftware risk:software=Uplink card:CruiseScience=Off Xdescent | batches 0 spare 12 credits 2","ending":"lost/listed"}],
+  ["fundingVerify", "cautious", 99, {"week":24,"spent":208,"income":222,"credits":14,"due":24,"margin":12,"events":"4:PullIn:Accept 5:Camera:Decline 10:IcdMismatch:Skip 16:PartsAlert:Fly","levels":"software2 pressure2 thrusters0 descent3 payload2 night0","accepted":"software,thrusters","flight":"card:Lightning=Check Xdescent | batches 0 spare 4 credits 14","ending":"lost/missed"}],
+  ["declineNone", "cautious", 12, {"week":12,"spent":146,"income":162,"credits":16,"due":22,"margin":16,"events":"4:PullIn:Accept 8:SecondOffer:Alone 10:IcdMismatch:Skip","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"software,pressure,thrusters,descent,payload","flight":"card:Scrub=Wait card:CruiseScience=On Xdescent | batches 0 spare 12 credits 4","ending":"salvage/listed"}],
+  ["fundingVerify", "cautious", 157, {"week":24,"spent":208,"income":222,"credits":14,"due":24,"margin":12,"events":"4:PullIn:Accept 5:Camera:Decline 10:IcdMismatch:Skip 16:PartsAlert:Fly","levels":"software2 pressure2 thrusters0 descent3 payload2 night0","accepted":"software,thrusters","flight":"card:Lightning=Check card:CruiseScience=On Xdescent | batches 0 spare 4 credits 10","ending":"salvage/missed"}],
+  ["techVerify", "cautious", 2, {"week":19,"spent":160,"income":162,"credits":2,"due":22,"margin":16,"events":"4:PullIn:Accept 5:Review:UseSlot 10:LauncherSlip:Keep 16:PartsAlert:Fly","levels":"software2 pressure0 thrusters0 descent3 payload2 night0","accepted":"software,pressure,thrusters","flight":"card:Lightning=Check card:Eclipse=Exposed Xpayload risk:payload=Restart plan=extra | batches 0 spare 10 credits 2","ending":"noData/listed"}],
+  ["fundingVerify", "cautious", 174, {"week":23,"spent":202,"income":202,"credits":0,"due":24,"margin":12,"events":"4:PartnerExit:Accept 8:SecondOffer:Alone 10:PullIn:Accept 16:LauncherSlip:Keep","levels":"software2 pressure1 thrusters0 descent3 payload2 night0","accepted":"software,pressure,thrusters","flight":"card:Scrub=Rush card:CruiseScience=Off Xpayload risk:payload=Restart plan=extra | batches 0 spare 6 credits 0","ending":"noData/missed"}],
+  ["fundingVerify", "diagnostics", 1, {"week":24,"spent":202,"income":222,"credits":20,"due":24,"margin":12,"events":"4:SupplierDelay:Wait 5:Camera:Decline 10:PullIn:Accept 16:IcdMismatch:Skip","levels":"software2 pressure1 thrusters0 descent3 payload2 night0","accepted":"software,pressure,thrusters","flight":"card:Lightning=Check card:Eclipse=Exposed plan=diagnostics night=rest | batches 0 spare 4 credits 20","ending":"noData/tradeoff"}],
+  ["refuseToSign", "cautious", 1, {"week":22,"spent":158,"income":162,"credits":4,"due":22,"margin":16,"events":"4:SupplierDelay:Wait 8:SecondOffer:Alone 10:PullIn:Accept 16:LauncherSlip:Keep","levels":"software0 pressure0 thrusters0 descent2 payload1 night0","accepted":"","flight":"","ending":"stopped/deadline"}],
+  ["overspend", "cautious", 1, {"week":11,"spent":152,"income":162,"credits":10,"due":22,"margin":0,"events":"4:SupplierDelay:Wait 8:SecondOffer:Alone 10:PullIn:Accept","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"","flight":"","ending":"stopped/funds"}],
+  ["standDown", "cautious", 5, {"week":4,"spent":98,"income":150,"credits":52,"due":24,"margin":0,"events":"4:CostReview:Stop","levels":"software0 pressure0 thrusters0 descent0 payload0 night0","accepted":"","flight":"","ending":"stopped/cancelled"}],
+]
+
+test('every ending has a fixed-seed route with the documented weeks, spending, events and result', () => {
+  for (const [strategy, pick, seed, expected] of routes) assert.deepEqual(summary(playRoute(strategy, pick, seed)), expected, `${strategy} ${pick} ${seed}`)
+  assert.deepEqual(routes.map(route => route[3].ending).sort(), mission.endings.map(ending => `${ending.outcome}/${ending.closing}`).sort())
+})
+
+test('the books balance on every route: income minus spending is what is left, and the flight only spends', () => {
+  for (const [strategy, pick, seed] of routes) {
+    const state = playRoute(strategy, pick, seed).get()
+    assert.equal(state.income - state.spent, state.credits, `${strategy} ${seed}`)
+    assert.ok(state.week <= state.due || state.stop === 'deadline', `${strategy} ${seed}`)
+    if (state.flight) assert.ok(state.flight.credits <= state.credits && state.flight.spareKg <= state.margin + 4)
+  }
+})
+
+test('the same seed and the same choices give exactly the same run', () => {
+  for (const name of Object.keys(strategies)) for (const pick of Object.keys(picks)) for (const seed of [1, 7, 99, 1234]) {
+    const [first, second] = [playRoute(name, pick, seed), playRoute(name, pick, seed)]
+    assert.deepEqual(summary(first), summary(second))
+    assert.deepEqual(first.get().flight?.steps, second.get().flight?.steps)
+  }
+})
+
+test('verification looks at a fixed truth: the order of work and other tests never change what a test reports', () => {
+  for (const seed of seeds.slice(0, 300)) {
+    const reports = (order: readonly (typeof lunarRiskIds[number])[]) => {
+      const run = start(seed).design({ route: 'lowEnergy' })
+      run.work('assess')
+      return Object.fromEntries(order.map(id => [id, run.verify(id)]))
     }
+    const forward = reports(['software', 'pressure', 'thrusters', 'descent', 'payload'])
+    const backward = reports(['payload', 'descent', 'thrusters', 'pressure', 'software'])
+    assert.deepEqual(forward, { ...backward })
+    for (const id of lunarRiskIds) if (forward[id] === 'found') assert.ok(hasDefect(seed, lunarItemId(basic, id), lunarMaturity(basic, id)))
   }
-  return run
+})
+
+test('a fixed defect never shows up in flight, and an unfixed known defect always does', () => {
+  let fixed = 0
+  for (const seed of seeds.slice(0, 600)) {
+    const states = lunarUntested()
+    if (!hasDefect(seed, 'lunar:pressure', 'heritage')) continue
+    const fly = (state: typeof states.pressure) => flyLunar(seed, { design: { ...basic, route: 'lowEnergy', sensor: 'redundant' }, states: { ...states, pressure: state }, marginKg: 30, credits: 40 }, cautious)
+    assert.ok(fly({ level: 2, found: true, fixed: false }).failures.includes('pressure'))
+    assert.ok(!fly({ level: 2, found: true, fixed: true }).failures.includes('pressure'))
+    fixed += 1
+  }
+  assert.ok(fixed > 60)
+})
+
+test('a backup lidar turns a descent defect from the end of the mission into a landing', () => {
+  for (const seed of seeds.slice(0, 600)) {
+    if (!hasDefect(seed, 'lunar:descent', 'new')) continue
+    const fly = (sensor: LunarDesign['sensor']) => flyLunar(seed, { design: { ...basic, route: 'lowEnergy', sensor }, states: lunarUntested(), marginKg: 40, credits: 40 }, cautious)
+    const [single, backup] = [fly('single'), fly('redundant')]
+    if (single.segment === 'descent') assert.ok(single.outcome === 'lost' || single.outcome === 'salvage')
+    if (backup.failures.includes('descent')) assert.ok(!backup.upright && backup.outcome !== 'lost')
+  }
+  assert.equal(lunarSeverity(basic, 'descent'), 'fatal')
+  assert.equal(lunarSeverity({ ...basic, sensor: 'redundant' }, 'descent'), 'degraded')
+  assert.equal(lunarSeverity(basic, 'thrusters'), 'degraded')
+  assert.equal(lunarSeverity(basic, 'thrusters', true), 'fatal')
+})
+
+test('the event deck: the pull-in comes in the first two draws, the rest is a full shuffle and every card turns up', () => {
+  const first = new Set<string>()
+  const others = mission.devCards.map(item => item.id).filter(id => id !== 'PullIn').sort()
+  for (const seed of seeds) {
+    const deck = lunarDevDeck(seed)
+    assert.ok(deck.pullInSlot === 0 || deck.pullInSlot === 1)
+    assert.deepEqual([...deck.order].sort(), others)
+    assert.deepEqual(lunarDevDeck(seed), deck)
+    first.add(deck.order[0])
+    const flight = lunarFlightCards(seed)
+    first.add(flight.launch); first.add(flight.cruise)
+  }
+  for (const item of [...mission.devCards.filter(card => card.id !== 'PullIn'), ...mission.launchCards, ...mission.cruiseCards]) assert.ok(first.has(item.id), item.id)
+  assert.ok(mission.devCards.length + mission.launchCards.length + mission.cruiseCards.length + mission.lossCards.length >= 12)
+})
+
+test('a run that reaches flight meets five external events, six when an orbiter offers to image a lost lander', () => {
+  for (const seed of seeds.slice(0, 400)) for (const name of ['fundingVerify', 'techVerify', 'declineSome']) {
+    const state = strategies[name](seed).get()
+    const drawn = state.events.filter(event => mission.devCards.some(item => item.id === event.card))
+    assert.ok(drawn.every(event => event.choice), `${name} ${seed}`)
+    assert.equal(new Set(drawn.map(event => event.card)).size, drawn.length)
+    if (state.week >= 16) assert.equal(drawn.length, mission.drawWeeks.length, `${name} ${seed}`)
+    assert.equal(drawn.filter(event => event.card === 'PullIn').length, state.week >= 10 ? 1 : drawn.filter(event => event.card === 'PullIn').length)
+  }
+})
+
+test('mass, verification ladder and review thresholds match the story document', () => {
+  assert.equal(lunarMass(basic).margin, 4)
+  assert.equal(lunarMass({ ...basic, mount: 'lightweight' }).margin, 12)
+  assert.equal(lunarMass({ ...basic, route: 'lowEnergy' }).margin, 16)
+  assert.equal(lunarMass(basic, 0, false).margin, 14)
+  const ladder = lunarRiskIds.flatMap(id => mission.risks[id].steps.map(step => mission.costs[step]))
+  assert.equal(ladder.length, 18)
+  assert.equal(ladder.reduce((total, step) => total + step.weeks, 0), 18)
+  assert.equal(ladder.reduce((total, step) => total + step.credits, 0), 114)
+  const mainline = (['assess', 'prelim', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'integrate'] as const).map(id => mission.costs[id])
+  assert.equal(mainline.reduce((total, step) => total + step.weeks, 0), 12)
+  assert.equal(mainline.reduce((total, step) => total + step.credits, 0) + mission.payloads.basic.cost + mission.sensors.single.cost, 140)
+  // Unverified items are all above the signing threshold. A heritage item clears it at unit test, a new one only end to end.
+  assert.deepEqual(lunarAcceptance(basic, lunarUntested()), ['software', 'pressure', 'thrusters', 'descent', 'payload'])
+  assert.ok(believedRisk('heritage', 2) < reviewRiskThreshold && believedRisk('new', 2) > reviewRiskThreshold && believedRisk('new', 3) < reviewRiskThreshold)
+  const odds = lunarOdds(basic, lunarUntested())
+  assert.ok(Math.abs(odds.noFatal - 0.6) < 1e-9 && odds.minimum < odds.noFatal)
+})
+
+// Balance. The README has no target table for this chapter yet, so these bands are the ones proposed in
+// docs/story/lunar-mission.md, measured over 2,000 seeds with the cautious flight choices.
+const targets: Record<string, [number, number]> = {
+  declineNone: [0.35, 0.5], declineSome: [0.52, 0.68], techVerify: [0.72, 0.87], fundingVerify: [0.75, 0.9], lidarVerify: [0.72, 0.87], stretchNone: [0.5, 0.67],
 }
-
-// After the weighing, close a known shortfall with the cheapest fix the run can still afford, then review and fly.
-function finish(run: Run, plan: Plan = 'extra') {
-  while (!run.over && !run.review()) {
-    if (run.over) break
-    const before = run.week
-    if (run.design.mount === 'standard' && run.slots > 0) run.remedy('partnerMount')
-    else if (run.design.route === 'direct' && run.week + 2 <= run.due - mission.routes.lowEnergy.leadWeeks && run.credits >= 16) run.remedy('reroute')
-    else if (run.design.mount === 'standard' && run.credits >= 26) run.remedy('mount')
-    else { run.stopNow('margin'); break }
-    if (run.week === before || !run.work('retest')) break
+test('balance: each strategy meets the minimum within its target band over 2,000 seeds', () => {
+  const rates: Record<string, number> = {}
+  for (const [name, [low, high]] of Object.entries(targets)) {
+    const met = seeds.filter(seed => { const ending = playRoute(name, 'cautious', seed).ending().outcome; return ending === 'success' || ending === 'extra' }).length
+    rates[name] = met / seeds.length
+    assert.ok(rates[name] >= low && rates[name] <= high, `${name}: ${rates[name]}`)
   }
-  if (!run.over) run.fly(plan)
-  return run
+  // Looking pays: the same self-funded design does better with some verification, and a partner does better still.
+  assert.ok(rates.declineSome > rates.declineNone + 0.1 && rates.fundingVerify > rates.declineSome + 0.1 && rates.techVerify > rates.declineSome + 0.1)
+})
+
+test('reachability: every cell of the ending matrix turns up across strategies, choices and seeds', () => {
+  const cells = new Set<string>()
+  for (const name of Object.keys(strategies)) for (const pick of Object.keys(picks)) for (const seed of seeds.slice(0, 300)) {
+    const ending = playRoute(name, pick, seed).ending()
+    cells.add(`${ending.outcome}/${ending.closing}`)
+  }
+  const matrix = mission.endings.map(ending => `${ending.outcome}/${ending.closing}`)
+  assert.deepEqual([...cells].sort(), [...matrix].sort())
+  for (const outcome of Object.keys(mission.outcomes)) assert.ok(matrix.filter(cell => cell.startsWith(`${outcome}/`)).length >= 2, outcome)
+})
+
+function keysIn(value: unknown, found = new Set<string>()): Set<string> {
+  if (typeof value === 'string' && /^lunar[A-Z]?/.test(value) && value in en) found.add(value)
+  else if (value && typeof value === 'object') Object.values(value).forEach(item => keysIn(item, found))
+  return found
 }
+const variables = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort().join()
 
-const strategies = {
-  // Funded partnership: buys the lightweight mount, then spends two verification steps on the landing.
-  fundingBalanced: seed => {
-    const run = start(seed)
-    run.sign('funding')
-    run.configure({ mount: 'lightweight' })
-    return finish(build(run, 'assess', 'descentSim', 'prelim', 'contract', 'contract', 'detail', 'freeze', 'sensorTest', 'buildFlight', 'buildPayload', 'buildGround', 'integrate'))
-  },
-  // Technical partnership: slots pay for the mount, a shorter lander build and one test.
-  techBalanced: seed => {
-    const run = start(seed)
-    run.sign('tech')
-    run.configure({ mount: 'lightweight' })
-    return finish(build(run, 'assess', 'descentSim', 'prelim', 'contract', 'contract', 'contract', 'detail', ['freeze', 'slot'], ['sensorTest', 'slot'],
-      ['buildFlight', 'slot'], 'buildPayload', 'buildGround', 'integrate'))
-  },
-  fundingNoVerification: seed => {
-    const run = start(seed)
-    run.sign('funding')
-    return finish(build(run, 'assess', 'prelim', 'contract', 'contract', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'integrate'))
-  },
-  techNoVerification: seed => {
-    const run = start(seed)
-    run.sign('tech')
-    return finish(build(run, 'assess', 'prelim', 'contract', 'contract', 'contract', 'detail', 'freeze', ['buildFlight', 'slot'], 'buildPayload', 'buildGround', ['integrate', 'slot']))
-  },
-  decline: seed => finish(build(start(seed), 'assess', 'prelim', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'integrate')),
-  everythingVerified: seed => {
-    const run = start(seed)
-    run.sign('funding')
-    run.configure({ mount: 'lightweight' })
-    return finish(build(run, 'assess', 'trade', 'navAnalysis', 'descentSim', 'thermalAnalysis', 'prelim', 'contract', 'contract', 'detail', 'freeze',
-      'thrusterTest', 'sensorTest', 'thermalTest', 'buildFlight', 'buildPayload', 'buildGround', 'navRehearsal', 'rehearse', 'dayRehearsal', 'integrate'))
-  },
-} satisfies Record<string, (seed: number) => Run>
-
-function rate(strategy: (seed: number) => Run) {
-  const runs = seeds.map(seed => strategy(seed))
-  const results = runs.map(run => run.result())
-  const share = (match: (result: typeof results[number]) => boolean) => results.filter(match).length / results.length
-  return {
-    minimum: share(result => result.outcome === 'extra' || result.outcome === 'success'),
-    stretch: share(result => result.outcome === 'extra'),
-    launched: share(result => result.outcome !== 'stopped'),
-    lost: share(result => result.outcome === 'lost'),
-    shown: runs.reduce((total, run) => total + run.forecast().minimum, 0) / runs.length,
+test('both dictionaries hold every lunar text key, with the same variables in each language', () => {
+  assert.deepEqual(Object.keys(zhTW).sort(), Object.keys(en).sort())
+  const used = keysIn({ mission, lunarProposals })
+  assert.ok(used.size > 350, `${used.size}`)
+  const dictionaries: Record<string, string>[] = [en, zhTW]
+  for (const key of Object.keys(en).filter(name => name.startsWith('lunar'))) {
+    for (const dictionary of dictionaries) assert.ok(dictionary[key]?.trim(), key)
+    assert.equal(variables(dictionaries[0][key]), variables(dictionaries[1][key]), key)
   }
-}
-
-test('every lunar text key exists in both dictionaries', () => {
-  const keys = new Set<string>()
-  const collect = (value: unknown, key = '') => {
-    if (typeof value === 'string' && ['title', 'brief', 'label', 'description', 'carried', 'pass', 'requires', 'failure'].includes(key)) keys.add(value)
-    else if (value && typeof value === 'object') for (const [name, child] of Object.entries(value)) collect(child, name)
+  // Every card and every failure response has a title, a situation, a line of dialogue, a mission file, choices and results.
+  const cards = [...mission.storyEvents, ...mission.devCards, ...mission.launchCards, ...mission.cruiseCards, ...mission.lossCards]
+  for (const item of cards) {
+    for (const key of [item.title, item.detail, item.quote, item.file]) assert.ok(key in en, key)
+    assert.ok(item.choices.length >= 2 && item.choices.length <= 4, item.id)
+    assert.ok(item.history.every(id => id in mission.sources), item.id)
   }
-  collect(mission)
-  collect(lunarProposals)
-  assert.ok(keys.size > 90)
-  for (const key of keys) {
-    assert.ok(key in en, `en is missing ${key}`)
-    assert.ok(key in zhTW, `zh-TW is missing ${key}`)
-  }
-  assert.deepEqual(Object.keys(zhTW), Object.keys(en))
-  const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort()
-  for (const key of Object.keys(en) as (keyof typeof en)[]) assert.deepEqual(placeholders(zhTW[key]), placeholders(en[key]), key)
-})
-
-test('every verification step is a costed work, each level costs more, and at most two items can end the mission', () => {
-  for (const id of lunarRiskIds) {
-    const costs = mission.risks[id].steps.map(step => mission.costs[step as WorkId])
-    assert.equal(costs.length, topLevel)
-    for (let level = 1; level < costs.length; level += 1) assert.ok(costs[level].credits > costs[level - 1].credits)
-  }
-  assert.ok(Object.values(mission.risks).filter(risk => risk.severity === 'fatal').length <= 2)
-  assert.ok(Object.values(mission.risks).some(risk => risk.segment === 'surface' && risk.severity === 'degraded'))
-})
-
-const routes = {
-  funding: (seed: number) => strategies.fundingBalanced(seed),
-  tech: (seed: number) => strategies.techBalanced(seed),
-  none: (seed: number) => strategies.fundingNoVerification(seed),
-  decline: (seed: number) => strategies.decline(seed),
-  // Backup lidar, high-rate payload and the low-energy route leave one spare week before the earlier review date.
-  backup: (seed: number, fix = false) => {
-    const run = start(seed)
-    run.sign('funding')
-    run.configure({ payload: 'advanced', sensor: 'redundant', route: 'lowEnergy', mount: 'lightweight' })
-    for (const id of ['assess', 'descentSim'] as const) run.work(id)
-    if (fix && run.known.landing.found) run.fix('landing')
-    for (const id of ['prelim', 'contract', 'contract', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'integrate'] as const) run.work(id)
-    return finish(run)
-  },
-  // Trade study, navigation analysis and two landing tests use every week before the review date, so a late finding leaves no time to fix it.
-  late: (seed: number, fix: boolean) => {
-    const run = start(seed)
-    run.sign('funding')
-    for (const id of ['assess', 'trade', 'navAnalysis'] as const) run.work(id)
-    run.configure({ mount: 'lightweight' })
-    for (const id of ['prelim', 'contract', 'contract', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'integrate', 'descentSim', 'sensorTest'] as const) run.work(id)
-    if (fix && run.known.landing.found) run.fix('landing')
-    return finish(run)
-  },
-}
-
-test('seed 4, tests that only confirm: both partnerships deliver the baseline mission', () => {
-  assert.deepEqual(routes.funding(4).result(), {
-    week: 16, spent: 178, credits: 32, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 16, margin: 18,
-    flew: ['correction 5% held', 'landing 9% held', 'surface 20% held'], found: [], accepted: ['landing', 'surface'], forecast: { minimum: 86, noFatal: 86 },
-  })
-  assert.deepEqual(routes.tech(4).result(), {
-    week: 16, spent: 144, credits: 6, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 16, margin: 18,
-    flew: ['correction 5% held', 'landing 9% held', 'surface 20% held'], found: [], accepted: ['landing', 'surface'], forecast: { minimum: 86, noFatal: 86 },
-  })
-})
-
-test('seed 3, bad news in time: the descent simulation finds a landing defect and both partnerships can pay for the fix', () => {
-  assert.deepEqual(routes.funding(3).result(), {
-    week: 16, spent: 176, credits: 34, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 16, margin: 19,
-    flew: ['correction 0% held', 'landing 0% held', 'surface 20% held'], found: ['landing by descentSim'], accepted: ['surface'], forecast: { minimum: 100, noFatal: 100 },
-  })
-  // The technical partnership ends with nothing left: the fix took its last 6 credits.
-  assert.deepEqual(routes.tech(3).result(), {
-    week: 16, spent: 150, credits: 0, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 16, margin: 19,
-    flew: ['correction 0% held', 'landing 0% held', 'surface 20% held'], found: ['landing by descentSim'], accepted: ['surface'], forecast: { minimum: 100, noFatal: 100 },
-  })
-})
-
-test('seeds 16 and 13, tests can miss: the simulation passes a defect that only a deeper test catches', () => {
-  // Seed 16: the hardware-in-the-loop test catches what the simulation missed. A surface defect then costs one window, not the batch.
-  assert.deepEqual(routes.funding(16).result(), {
-    week: 17, spent: 184, credits: 26, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 17, margin: 17,
-    flew: ['correction 10% held', 'landing 0% held', 'surface 20% failed'], found: ['landing by sensorTest'], accepted: ['correction', 'surface'], forecast: { minimum: 90, noFatal: 90 },
-  })
-  // Seed 13: both tests pass, the player believes 9%, and the single sensor fails on descent.
-  assert.deepEqual(routes.funding(13).result(), {
-    week: 16, spent: 178, credits: 32, due: 18, outcome: 'lost', stop: 'landing', delivered: 0, approvedWeek: 16, margin: 16,
-    flew: ['correction 15% held', 'landing 9% failed'], found: [], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 77, noFatal: 77 },
-  })
-})
-
-test('seed 16, bad news too late: a defect found in the last week can be flown knowingly or fixed past the deadline', () => {
-  const knowingly = routes.late(16, false).result()
-  assert.deepEqual([knowingly.week, knowingly.due, knowingly.outcome, knowingly.stop, knowingly.found], [18, 18, 'lost', 'landing', ['landing by sensorTest']])
-  assert.ok(knowingly.flew.includes('landing 100% failed') && knowingly.accepted.includes('landing'))
-  assert.equal(knowingly.forecast.minimum, 0)
-  const fixed = routes.late(16, true).result()
-  assert.deepEqual([fixed.week, fixed.due, fixed.outcome, fixed.stop], [19, 18, 'stopped', 'deadline'])
-})
-
-test('a backup sensor turns a known landing defect into a tilted landing, and a fix into a second batch', () => {
-  // Seed 2: nothing was found, the backup takes over and the high-rate payload still returns one batch from two windows.
-  assert.deepEqual(routes.backup(2).result(), {
-    week: 15, spent: 202, credits: 8, due: 16, outcome: 'success', stop: '', delivered: 1, approvedWeek: 15, margin: 18,
-    flew: ['correction 27% held', 'landing 25% failed', 'surface 40% held'], found: [], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 66, noFatal: 73 },
-  })
-  // Seed 20: the simulation finds the defect. Signing for it keeps the spare week and lands tilted.
-  assert.deepEqual(routes.backup(20).result(), {
-    week: 15, spent: 202, credits: 8, due: 16, outcome: 'success', stop: '', delivered: 1, approvedWeek: 15, margin: 18,
-    flew: ['correction 27% held', 'landing 100% failed', 'surface 40% held'], found: ['landing by descentSim'], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 44, noFatal: 73 },
-  })
-  // Fixing it uses the last week and the last credits, and the upright landing reaches the stretch goal.
-  assert.deepEqual(routes.backup(20, true).result(), {
-    week: 16, spent: 208, credits: 2, due: 16, outcome: 'extra', stop: '', delivered: 2, approvedWeek: 16, margin: 18,
-    flew: ['correction 27% held', 'landing 0% held', 'surface 40% held'], found: ['landing by descentSim'], accepted: ['correction', 'surface'], forecast: { minimum: 73, noFatal: 73 },
-  })
-})
-
-test('the trade study and the weighing narrow the interface mass, and analysis can bring good news about the reserve', () => {
-  const run = start(1)
-  run.work('assess')
-  assert.deepEqual([run.interfaceKnown(), percent(run.risks().correction.risk)], [{ min: 10, max: 20 }, 70])
-  run.work('trade')
-  // Bad news before the freeze: the standard mount is in the heavy half. Changing mounts is still free.
-  assert.deepEqual([run.interfaceKnown(), percent(run.risks().correction.risk)], [{ min: 16, max: 20 }, 85])
-  run.configure({ mount: 'lightweight' })
-  assert.deepEqual([run.interfaceKnown(), percent(run.risks().correction.risk)], [{ min: 3, max: 4 }, 13])
-  // Good news on another run: analysis puts the corrections inside the reserve, so no deeper navigation test is needed.
-  const lucky = start(28)
-  lucky.configure({ mount: 'lightweight' })
-  lucky.work('assess')
-  assert.equal(percent(lucky.risks().correction.risk), 8)
-  lucky.work('navAnalysis')
-  assert.deepEqual([lucky.risks().correction.known, lucky.risks().correction.risk], [{ min: 0, max: 9 }, 0])
-})
-
-test('without optional verification the run rests on luck, and the debrief says what each first test would have shown', () => {
-  assert.deepEqual(routes.none(5).result(), {
-    week: 14, spent: 150, credits: 60, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 14, margin: 5,
-    flew: ['correction 70% held', 'landing 40% held', 'surface 20% held'], found: [], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 18, noFatal: 18 },
-  })
-  assert.deepEqual(routes.none(1).result(), {
-    week: 14, spent: 150, credits: 60, due: 18, outcome: 'lost', stop: 'transfer', delivered: 0, approvedWeek: 14, margin: 4,
-    flew: ['correction 75% failed'], found: [], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 15, noFatal: 15 },
-  })
-  const run = start(1)
-  run.sign('funding')
-  for (const id of ['assess', 'prelim', 'contract', 'contract', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'integrate'] as const) run.work(id)
-  assert.deepEqual(run.interfaceKnown(), { min: 16, max: 16 })
-  assert.deepEqual(run.nextStep('correction'), { work: 'navAnalysis', weeks: 1, credits: 4, found: true, known: { min: 10, max: 19 } })
-  assert.deepEqual(run.nextStep('landing'), { work: 'descentSim', weeks: 1, credits: 4, found: false, known: null })
-})
-
-test('declining both offers leaves no budget for verification or fixes', () => {
-  assert.deepEqual(routes.decline(8).result(), {
-    week: 12, spent: 150, credits: 0, due: 18, outcome: 'lost', stop: 'landing', delivered: 0, approvedWeek: 12, margin: 10,
-    flew: ['correction 45% held', 'landing 40% failed'], found: [], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 33, noFatal: 33 },
-  })
-  assert.deepEqual(routes.decline(5).result(), {
-    week: 12, spent: 150, credits: 0, due: 18, outcome: 'success', stop: '', delivered: 1, approvedWeek: 12, margin: 5,
-    flew: ['correction 70% held', 'landing 40% held', 'surface 20% held'], found: [], accepted: ['correction', 'landing', 'surface'], forecast: { minimum: 18, noFatal: 18 },
-  })
-  // One analysis step would cost 4 credits the run does not have.
-  const run = build(start(5), 'assess', 'prelim', 'detail', 'freeze', 'buildFlight', 'buildPayload', 'buildGround', 'descentSim', 'integrate')
-  assert.deepEqual([run.result().outcome, run.result().stop], ['stopped', 'funds'])
-})
-
-test('verifying everything to the top level never reaches flight review', () => {
-  for (const seed of seeds.slice(0, 300)) assert.equal(strategies.everythingVerified(seed).result().outcome, 'stopped')
-  const result = strategies.everythingVerified(4).result()
-  assert.deepEqual([result.week, result.due, result.spent, result.outcome], [21, 18, 206, 'stopped'])
-})
-
-test('the same seed and the same play give the same run, and test results agree with the flight', () => {
-  for (const strategy of Object.values(strategies)) {
-    for (const seed of seeds.slice(0, 60)) {
-      const [first, second] = [strategy(seed), strategy(seed)]
-      assert.deepEqual(first.result(), second.result())
-      assert.deepEqual(first.outcomes(), second.outcomes())
-    }
-  }
-  const design: Design = { ...mission.initialDesign, sensor: 'redundant' }
-  for (const seed of seeds.slice(0, 500)) {
-    const known: LunarKnowledge = { interface: topLevel, correction: topLevel, landing: untested, surface: untested }
-    for (const id of ['landing', 'surface'] as const) for (let level = 0; level < topLevel; level += 1) known[id] = verifyLunar(seed, design, id, known[id])
-    const flight = flyLunar(seed, design, known, 'extra')
-    // The revealed values are the values flown.
-    assert.equal(lunarRisks(seed, design, known).correction.known.min, lunarCorrection(seed, design.route))
-    assert.equal(flight.outcomes[0].failed, lunarRisks(seed, design, known).correction.risk === 1)
-    assert.equal(flight.margin, lunarMargin(design, lunarInterfaceKnown(seed, design, known).min).margin)
-    for (const id of ['landing', 'surface'] as const) {
-      const { item, maturity } = lunarDefectItem(design, id)
-      const truth = hasDefect(seed, item, maturity)
-      // A test never reports a defect that is not there, and whatever the tests said, the flight follows the truth.
-      if (known[id].found) assert.equal(truth, true)
-      const flown = flight.outcomes.find(entry => entry.id === id)
-      if (flown) assert.equal(flown.failed, truth)
-    }
-    const fixed = flyLunar(seed, design, { ...known, landing: { ...known.landing, fixed: true }, surface: { ...known.surface, fixed: true } }, 'extra')
-    assert.ok(fixed.outcomes.slice(1).every(entry => !entry.failed))
-  }
-})
-
-test('balance: success rates over 2000 seeds stay inside the design targets', () => {
-  const measured = Object.fromEntries(Object.entries(strategies).map(([name, strategy]) => [name, rate(strategy)])) as Record<keyof typeof strategies, ReturnType<typeof rate>>
-  if (process.env.LUNAR_BALANCE) console.table(measured)
-  for (const name of ['fundingBalanced', 'techBalanced'] as const) assert.ok(measured[name].minimum >= 0.8 && measured[name].minimum <= 0.9, name)
-  for (const name of ['fundingNoVerification', 'techNoVerification'] as const) assert.ok(measured[name].minimum <= 0.25, name)
-  assert.ok(measured.decline.minimum >= 0.05 && measured.decline.minimum <= 0.2)
-  assert.equal(measured.everythingVerified.launched, 0)
-  // The forecast shown at flight review matches how often each strategy meets the minimum.
-  for (const name of ['fundingBalanced', 'techBalanced', 'fundingNoVerification', 'techNoVerification', 'decline'] as const) {
-    assert.ok(Math.abs(measured[name].minimum - measured[name].shown) < 0.03, `${name}: shown ${measured[name].shown}, measured ${measured[name].minimum}`)
-  }
+  for (const id of lunarRiskIds) assert.ok(mission.risks[id].history.every(source => source in mission.sources), id)
+  for (const source of Object.values(mission.sources)) assert.match(source.url, /^https:\/\/([\w-]+\.)*(nasa\.gov|jpl\.nasa\.gov)\//)
 })
