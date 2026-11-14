@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { FastForward } from 'lucide-react'
-import { assemblyOrder, currentEvidence, forecast, powerTimeline, type Action, type Game } from '../game/mission'
+import { benchSequence, currentEvidence, forecast, planContact, powerTimeline, scopeSegment, type Action, type Game } from '../game/mission'
 import type { Message, Translate } from '../i18n'
 import { cubeSat, departments, type Department } from '../missions/cubesat'
 import { drawLab, type LabArt } from './labArt'
+
+const reducedMotion = '(prefers-reduced-motion: reduce)'
 
 const segments = {
   imaging: { title: 'labImaging', work: ['science', 'power'] },
@@ -17,23 +19,30 @@ const assemblyLabels = { science: 'labCalibrate', power: 'labConnect', comms: 'l
 export function Lab({ game, send, t }: { game: Game; send: (action: Action) => void; t: Translate }) {
   const [department, inspect] = useState<Department | null>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
-  const { playback, design, stage } = game
+  const { playback, design, stage, contact } = game
   const orbit = stage === 'flight'
   const assembly = playback?.kind === 'assembly'
   const evidence = currentEvidence(game)
   const timeline = powerTimeline(design)
   const available = cubeSat.supplies[design.supply].watts
+  const receiving = contact && evidence ? planContact(evidence, contact.choice) : null
+  const sequence = benchSequence(game.benchLead)
+  const scope = game.testFocus && scopeSegment(timeline, game.testFocus)
   const segment = playback?.kind === 'integration' ? timeline[playback.step]
-    : stage === 'review' ? timeline.reduce((peak, item) => item.watts > peak.watts ? item : peak) : undefined
+    : stage === 'review' ? timeline.find(item => item.watts > available) ?? scope ?? timeline.at(-1) : undefined
+  const tracked = scope && segment?.id === scope.id
   const warning = Boolean(segment && segment.watts > available)
   const assemblyStep = assembly ? playback.step : -1
-  const assembling = assembly ? assemblyOrder[assemblyStep] : undefined
+  const assembling = assembly ? sequence[assemblyStep] : undefined
   const active: readonly Department[] = segment ? segments[segment.id].work : assembling ? [assembling] : []
   const ready = (stage === 'integration' || stage === 'review' || orbit) && !assembly
-  const installed = assembly ? assemblyOrder.slice(0, assemblyStep + 1) : ready ? departments : []
+  const installed = assembly ? sequence.slice(0, assemblyStep + 1) : ready ? departments : []
+  const received = contact && receiving
+    ? contact.diagnosticsPending ? t('groundReceivingDiagnostics') : t('groundReceived', { next: contact.next + 1, total: receiving.batches })
+    : null
   const title = segment ? t(segments[segment.id].title)
     : assembling ? t(assemblyLabels[assembling])
-    : t(orbit ? 'labAwaitContact' : ready ? 'labReady' : stage === 'build' ? 'labParts' : 'labPlanning')
+    : received ?? t(orbit ? 'labAwaitContact' : ready ? 'labReady' : stage === 'build' ? 'labParts' : 'labPlanning')
   const configuration = {
     science: t(cubeSat.payloads[design.payload].label),
     power: t(cubeSat.supplies[design.supply].label),
@@ -42,17 +51,38 @@ export function Lab({ game, send, t }: { game: Game; send: (action: Action) => v
   const readout = segment && t('powerUse', { peak: segment.watts, available })
   const art: LabArt = {
     design, active, installed, assemblyStep, warning, orbit, comparing: department ?? undefined,
-    receiving: false, hasContact: false,
+    receiving: Boolean(receiving), received: contact?.next ?? 0,
   }
 
   useEffect(() => {
-    const ctx = canvas.current?.getContext('2d')
-    if (ctx) drawLab(ctx, art)
+    const context = canvas.current?.getContext('2d')
+    if (!context) return
+    const motion = window.matchMedia(reducedMotion)
+    let frame = 0
+    let timer: number | undefined
+    const paint = () => {
+      window.clearInterval(timer)
+      frame = 0
+      drawLab(context, art, 0)
+      if (!motion.matches && (playback || receiving)) {
+        timer = window.setInterval(() => {
+          frame += 1
+          drawLab(context, art, frame % 4)
+          if (!playback && frame === 4) window.clearInterval(timer)
+        }, 230)
+      }
+    }
+    paint()
+    motion.addEventListener('change', paint)
+    return () => {
+      window.clearInterval(timer)
+      motion.removeEventListener('change', paint)
+    }
   })
 
   useEffect(() => {
     if (!playback) return
-    const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const motion = window.matchMedia(reducedMotion)
     const advance = (skip = false) => send({ type: 'advanceLab', playback, skip })
     // Checkpoints survive reload. Reduced motion compresses each beat and still leaves the result visible.
     const delay = motion.matches ? 400 : warning ? 2400 : 1400
@@ -68,7 +98,7 @@ export function Lab({ game, send, t }: { game: Game; send: (action: Action) => v
   function teamNote(team: Department) {
     const config = configuration[team]
     if (assembly) {
-      const index = assemblyOrder.indexOf(team)
+      const index = sequence.indexOf(team)
       if (team === assembling) return t(assemblyLabels[team])
       return t(index < assemblyStep ? 'labBenchVerified' : team === 'comms' ? 'labWaitClearance' : 'labBenchQueued', { config })
     }
@@ -87,25 +117,36 @@ export function Lab({ game, send, t }: { game: Game; send: (action: Action) => v
         <FastForward size={16} aria-hidden />{t('labSkip')}
       </button>}
     </div>
-    <canvas className="lab-art" ref={canvas} width={320} height={140} aria-hidden />
+    <div className="lab-scene">
+      <canvas className="lab-art" ref={canvas} width={320} height={140} aria-hidden />
+      {tracked && <span className="lab-focus">{t(playback ? 'labScope' : 'labScopeSaved')}</span>}
+    </div>
     <div className="lab-readout" role="status">
       <span>{title}</span>
       {readout && <strong>{readout}</strong>}
     </div>
-    {segment && !orbit && <ol className="lab-timeline" aria-label={t('labTimeline')}>
-      {timeline.map(item => <li key={item.id} className={item.watts > available ? 'over-limit' : undefined}
+    {contact && <p className="lab-note">{t('groundTally', { accepted: contact.accepted, archived: contact.next - contact.accepted })}</p>}
+    {segment && <ol className="lab-timeline" aria-label={t('labTimeline')}>
+      {timeline.map((item, index) => <li key={item.id} className={item.watts > available ? 'over-limit' : undefined}
         aria-current={item.id === segment.id ? 'step' : undefined}>
-        <span>{t(segments[item.id].title)}</span><small>{item.watts} W</small>
+        <span>{t(segments[item.id].title)}</span>
+        <small>{playback && index > playback.step ? t('labSegmentPending') : `${item.watts} W`}</small>
       </li>)}
     </ol>}
     {!orbit && <div className="lab-crew">
       {departments.map(team => <button key={team} type="button" aria-pressed={department === team}
+        aria-description={active.includes(team) ? t('labActive', { team: t(team) }) : undefined}
         onClick={() => inspect(department === team ? null : team)}>
         <span className={active.includes(team) ? 'crew-light active' : 'crew-light'} aria-hidden />{t(team)}
       </button>)}
     </div>}
     {!orbit && department && <p className="lab-note" role="status">{teamNote(department)}</p>}
-    {stage === 'review' && !playback && evidence?.design.schedule === 'stagger' &&
+    {stage === 'integration' && !playback && game.benchLead && !game.evidence && <p className="lab-note">
+      {t(game.benchLead === 'science' ? 'labBenchScienceResult' : 'labBenchPowerResult', {
+        camera: configuration.science, watts: cubeSat.payloads[design.payload].watts, available,
+      })}
+    </p>}
+    {stage === 'review' && !playback && evidence?.powerPass && evidence.design.schedule === 'stagger' &&
       <p className="lab-note">{t('labStaggerResult', {
         loss: cubeSat.schedules.stagger.batchLoss,
         batches: evidence.batches,

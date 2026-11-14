@@ -26,11 +26,11 @@ export type LabArt = {
   warning: boolean
   orbit: boolean
   receiving: boolean
-  hasContact: boolean
+  received: number
 }
 
-export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
-  const { design, active, installed, warning, orbit, receiving, hasContact } = art
+export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt, frame: number) {
+  const { design, active, installed, warning, orbit, receiving, received } = art
   const rect = (color: string, x: number, y: number, w: number, h: number) => {
     ctx.fillStyle = color
     ctx.fillRect(x, y, w, h)
@@ -48,7 +48,8 @@ export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
     rect(blue, x + 6, y + 7, w - 12, 1)
     rect(blue, x + 6, y + 14, w - 12, 1)
     const wave = warning ? alarm : signal
-    for (const [index, offset] of [0, 0, 3, 7, 3, 1, 1].entries()) rect(wave, x + 6 + index * 3, y + 14 - offset, 3, 1)
+    const samples = [0, 0, 3, 7, 3, 1, 1]
+    samples.forEach((_, index) => rect(wave, x + 6 + index * 3, y + 14 - samples[(index + frame) % samples.length], 3, 1))
   }
 
   function satellite(x: number, y: number, flight = false) {
@@ -63,7 +64,7 @@ export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
     rect(steel, x + 2, y + 28, 43, 3)
     for (const bolt of [8, 26, 39]) rect(white, x + bolt, y + 28, 2, 2)
     if (installed.includes('science')) {
-      rect(ink, x + 17 - lens / 2 | 0, y + 9, lens, lens + 3)
+      rect(ink, x + 17 - Math.floor(lens / 2), y + 9, lens, lens + 3)
       rect(active.includes('science') ? signal : steel, x + 15, y + 11, lens - 4, lens - 2)
       rect(blue, x + 15, y + 13, lens - 5, 2)
     } else {
@@ -120,8 +121,10 @@ export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
       rect(steel, x - 6, y + 11, 6, 1)
     }
     if (working) {
-      rect(coat, x + 9, y + 20, 9, 4)
-      rect(skin, x + 17, y + 19, 5, 5)
+      const hand = y + 20 + frame % 2
+      rect(coat, x + 9, hand, 9, 4)
+      rect(skin, x + 17, hand - 1, 5, 5)
+      rect(ink, x + 22, hand, id === 'comms' ? 3 : 5, 2)
       rect(warning ? alarm : navy, x - 2, y - 10, 4, 4)
     } else {
       rect(coat, x - 12, y + 18, 3, 9)
@@ -141,9 +144,9 @@ export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
       rect('#567a84', x, y, w, 5)
     }
     satellite(66, 46, true)
-    if (receiving || hasContact) {
+    if (receiving) {
       for (const [index, x] of [124, 136, 148, 160, 172, 184, 196, 208, 220, 232].entries()) {
-        rect(receiving ? signal : blue, x, 64 + index * 3, 5, 1)
+        rect(index % 3 === (received + frame) % 3 ? white : signal, x, 64 + index * 3, 5, 1)
       }
     }
     rect('#101f32', 228, 124, 92, 16)
@@ -153,7 +156,8 @@ export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
     rect(steel, 254, 91, 24, 4)
     rect(blue, 258, 95, 17, 4)
     rect(white, 263, 80, 2, 8)
-    rect(receiving || hasContact ? signal : blue, 262, 78, 4, 3)
+    rect(receiving ? signal : blue, 262, 78, 4, 3)
+    for (let packet = 0; packet < received; packet += 1) rect(signal, 244 + packet * 7, 119, 4, 2)
     return
   }
 
@@ -214,10 +218,17 @@ export function drawLab(ctx: CanvasRenderingContext2D, art: LabArt) {
   rect(steel, 206, 81, 2, 2)
   if (installed.includes('power')) {
     rect(warning ? alarm : ink, 179, 81, 11, 2)
+  } else {
+    const cells = design.supply === 'reinforced' ? 3 : 2
+    for (let cell = 0; cell < cells; cell += 1) rect(steel, 194 + cell * 5, 79, 4, 3)
   }
   satellite(143, 54)
-  rect(ink, 111, 77, 8, 6)
-  rect(steel, 111, 76, 10, 2)
+  if (!installed.includes('science')) {
+    const lens = design.payload === 'advanced' ? 13 : 9
+    rect(ink, 113, 83 - lens, lens, lens)
+    rect(steel, 114, 84 - lens, lens - 2, 2)
+    rect(blue, 116, 87 - lens, lens - 6, lens - 6)
+  }
   rect(blue, 214, 83, 12, 2)
   if (art.assemblyStep >= 0) rect(navy, 210, 57, Math.min(art.assemblyStep + 1, 3) * 4, 2)
   teams.forEach(crew)

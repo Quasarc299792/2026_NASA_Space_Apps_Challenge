@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { cubeSat as mission } from '../missions/cubesat'
 import {
-  affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, currentWork, forecast, passes, repairOptions,
-  sameDesign, testDesign, workCost, type Action, type Design, type Entry, type FlightChoice, type Game, type Remedy, type Stage,
+  affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, forecast, passes, planContact, powerTimeline, repairOptions,
+  sameDesign, scopeSegment, testDesign, workCost, type Action, type BenchLead, type ConfigStep, type Design, type Entry, type FlightChoice, type Game, type Remedy, type Stage, type TestFocus,
 } from '../game/mission'
 import type { Message, Translate } from '../i18n'
 import {
@@ -67,39 +67,53 @@ function Config({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
   }
 
   const feasibility = game.stage === 'feasibility'
-  const hardware = <>
-    <div className="reported-choice">
-      <ReportCard speaker="science" t={t}><p>{t(feasibility ? 'reportPayload' : 'reportPayloadRevision', { count: mission.minimumBatches })}</p></ReportCard>
-      <Options legend="payload" layout="pair" options={optionList(mission.payloads, option => t(option.description, { ...option, cost: money(option.cost) }))}
-        value={design.payload} choose={value => choose('payload', value)} t={t} />
-    </div>
-    <div className="reported-choice">
-      <ReportCard speaker="power" t={t}><p>{t(feasibility ? 'reportSupply' : 'reportSupplyRevision')}</p></ReportCard>
-      <Options legend="supply" layout="pair" options={optionList(mission.supplies, option => t(option.description, { ...option, cost: money(option.cost) }))}
-        value={design.supply} choose={value => choose('supply', value)} t={t} />
-    </div>
-  </>
-
+  const first: ConfigStep = feasibility ? 'payload' : 'schedule'
+  const second: ConfigStep = feasibility ? 'supply' : 'radio'
+  const step = game.configStep === second ? second : first
+  const payload = <div className="reported-choice">
+    <ReportCard speaker="science" t={t}><p>{t(feasibility ? 'reportPayload' : 'reportPayloadRevision', { count: mission.minimumBatches })}</p></ReportCard>
+    <Options legend="payload" layout="pair" options={optionList(mission.payloads, option => t(option.description, { ...option, cost: money(option.cost) }))}
+      value={design.payload} choose={value => choose('payload', value)} t={t} />
+  </div>
+  const supply = <div className="reported-choice">
+    <ReportCard speaker="power" t={t}><p>{t(feasibility ? 'reportSupply' : 'reportSupplyRevision')}</p></ReportCard>
+    <Options legend="supply" layout="pair" options={optionList(mission.supplies, option => t(option.description, { ...option, cost: money(option.cost) }))}
+      value={design.supply} choose={value => choose('supply', value)} t={t} />
+  </div>
+  const schedule = <div className="reported-choice">
+    <ReportCard speaker="comms" t={t}><p>{t('reportSchedule')}</p></ReportCard>
+    <Options legend="schedule" layout="pair" options={optionList(mission.schedules, option => t(option.description, { count: option.batchLoss }))}
+      value={design.schedule} choose={value => choose('schedule', value)} t={t} />
+  </div>
+  const radio = <div className="reported-choice">
+    <ReportCard speaker="comms" t={t}><p>{t('reportRadio', { minutes: mission.ditl.minQuietMinutes })}</p></ReportCard>
+    <Options legend="radio" layout="pair" options={optionList(mission.radios, option => t(option.description, { minutes: option.firstTxMinutes, capacity: option.groundCapacity }))}
+      value={design.radio} choose={value => choose('radio', value)} t={t} />
+  </div>
+  const choices = { payload, supply, schedule, radio }
+  const work = feasibility ? 'assess' : 'freeze'
+  const cost = workCost(game, work)
   return <div className="decisions">
-    {feasibility ? hardware : <>
-      <div className="reported-choice">
-        <ReportCard speaker="comms" t={t}><p>{t('reportSchedule')}</p></ReportCard>
-        <Options legend="schedule" layout="pair" options={optionList(mission.schedules, option => t(option.description, { count: option.batchLoss }))}
-          value={design.schedule} choose={value => choose('schedule', value)} t={t} />
-      </div>
-      <div className="reported-choice">
-        <ReportCard speaker="comms" t={t}><p>{t('reportRadio', { minutes: mission.ditl.minQuietMinutes })}</p></ReportCard>
-        <Options legend="radio" layout="pair" options={optionList(mission.radios, option => t(option.description, { minutes: option.firstTxMinutes, capacity: option.groundCapacity }))}
-          value={design.radio} choose={value => choose('radio', value)} t={t} />
-      </div>
-      <Disclosure label={t('hardwareChoices')}><div className="decisions">{hardware}</div></Disclosure>
-    </>}
-    {(!result.powerPass || (game.stage === 'design' && (!result.ditlPass || !result.dataPass))) && <div className="warning" aria-live="polite">
+    {choices[step]}
+    {step === second && (!result.powerPass || (!feasibility && (!result.ditlPass || !result.dataPass))) && <div className="warning" aria-live="polite">
       {!result.powerPass && <p>{powerFinding(result, t)}</p>}
-      {game.stage === 'design' && !result.ditlPass && <p>{t('earlyTransmissionEstimate', result.ditl)}</p>}
-      {game.stage === 'design' && result.powerPass && !result.dataPass &&
+      {!feasibility && !result.ditlPass && <p>{t('earlyTransmissionEstimate', result.ditl)}</p>}
+      {!feasibility && result.powerPass && !result.dataPass &&
         <p>{t('dataShortfallEstimate', { count: result.batches, minimum: mission.minimumBatches })}</p>}
     </div>}
+    <div className="action-row">
+      {step === first ? <ActionButton onClick={() => send({ type: 'configStep', step: second })}>
+        {t(feasibility ? 'nextSupply' : 'nextRadio')}
+      </ActionButton> : <>
+        <ActionButton disabled={!affordable(game, cost)} onClick={() => send({ type: 'work' })}>
+          {t(mission.costs[work].label)} <CostLabel t={t} {...cost} />
+        </ActionButton>
+        <button className="text-button" onClick={() => send({ type: 'configStep', step: first })}>
+          {t(feasibility ? 'backPayload' : 'backSchedule')}
+        </button>
+      </>}
+    </div>
+    {!feasibility && <Disclosure label={t('hardwareChoices')}><div className="decisions">{payload}{supply}</div></Disclosure>}
   </div>
 }
 
@@ -126,18 +140,74 @@ function DecisionLog({ game, t }: Pick<Props, 'game' | 't'>) {
   </ol>
 }
 
+function BenchWork({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
+  const [benchLead, setBenchLead] = useState<BenchLead>('science')
+  const [testFocus, setTestFocus] = useState<TestFocus>(game.testFocus ?? 'downlink')
+  const build = game.stage === 'build'
+  const work = build ? 'build' : 'integrate'
+  const cost = workCost(game, work)
+  return <>
+    {build ? <>
+      <ReportCard speaker="assembly" t={t}><p>{t('reportBenchChoice')}</p></ReportCard>
+      <Options legend="benchChoice" value={benchLead} choose={setBenchLead} t={t} options={[
+        { id: 'science', name: 'benchScience', detail: t('benchScienceDetail') },
+        { id: 'power', name: 'benchPower', detail: t('benchPowerDetail') },
+      ]} />
+    </> : <>
+      <ReportCard speaker="test" t={t}>
+        <p>{t(game.evidence ? 'reviewRetest' : 'reportIntegrationFocus')}</p>
+      </ReportCard>
+      <Options legend="focusChoice" value={testFocus} choose={setTestFocus} t={t} options={[
+        { id: 'imaging', name: 'focusImaging', detail: t('focusImagingDetail') },
+        { id: 'downlink', name: 'focusRadio', detail: t('focusRadioDetail') },
+      ]} />
+    </>}
+    <ActionButton disabled={!affordable(game, cost)} onClick={() => send({ type: 'runLab', benchLead, testFocus })}>
+      {t(!build && game.evidence ? 'retest' : mission.costs[work].label)} <CostLabel t={t} {...cost} />
+    </ActionButton>
+  </>
+}
+
 function Flight({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
   const [choice, setChoice] = useState<FlightChoice>('priority')
   const evidence = currentEvidence(game)
   if (!evidence) return null
+  if (game.contact) {
+    const { next, accepted, choice, diagnosticsPending } = game.contact
+    const { batches, diagnostics } = planContact(evidence, choice)
+    const remaining = batches - next - 1
+    if (diagnosticsPending) return <>
+      <ReportCard speaker="ground" t={t}>
+        <p>{t('groundDiagnosticsReport', { slots: diagnostics, count: batches })}</p>
+      </ReportCard>
+      <ActionButton onClick={() => send({ type: 'checkDiagnostics' })}>{t('groundLogDiagnostics')}</ActionButton>
+    </>
+    return <>
+      <ReportCard speaker="ground" t={t}>
+        <p>{t(next < mission.minimumBatches ? 'groundRequiredBatch' : 'groundExtraBatch', {
+          batch: next + 1, accepted, minimum: mission.minimumBatches,
+        })}</p>
+      </ReportCard>
+      <div className="batch-record">
+        <strong>{t('groundBatchId', { batch: next + 1 })}</strong>
+        <span>{t(remaining === 1 ? 'groundRemainingOne' : 'groundRemaining', { count: remaining })}</span>
+      </div>
+      <div className="action-row">
+        <ActionButton onClick={() => send({ type: 'checkBatch', batch: next, deliver: true })}>{t('groundAccept')}</ActionButton>
+        <button className="button secondary" onClick={() => send({ type: 'checkBatch', batch: next, deliver: false })}>{t('groundArchive')}</button>
+      </div>
+    </>
+  }
+  const extra = planContact(evidence, 'extra')
+  const diagnostics = planContact(evidence, 'diagnostics')
   return <>
     <ReportCard speaker="ground" t={t}><p>{t('reportFlight')}</p></ReportCard>
     <Options legend="ground" value={choice} choose={setChoice} t={t} options={[
       { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: mission.minimumBatches }) },
-      { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: evidence.batches }) },
-      { id: 'diagnostics', name: 'flightDiagnostics', detail: t('flightDiagnosticsDetail', { count: mission.diagnosticBatches }) },
+      { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: extra.batches }) },
+      { id: 'diagnostics', name: 'flightDiagnostics', detail: t('flightContactDiagnostics', { slots: diagnostics.diagnostics, count: diagnostics.batches }) },
     ]} />
-    <ActionButton onClick={() => send({ type: 'fly', choice })}>{t('runFlight')}</ActionButton>
+    <ActionButton onClick={() => send({ type: 'startContact', choice })}>{t('runFlight')}</ActionButton>
   </>
 }
 
@@ -162,6 +232,7 @@ function Results({ game, t, back }: Props) {
       {flight ? <Disclosure label={t('delivery')} value={batches(flight.batches)}>
         <p>{t('firstTx')} · {t('timestamp', { count: flight.firstTx })}</p>
         {Boolean(flight.diagnostics) && <p>{t('flightDiagnosticsSent')}</p>}
+        {Boolean(flight.archived) && <p>{t('groundArchivedResult', { count: flight.archived ?? 0 })}</p>}
       </Disclosure> : <div className="receipt-line"><span>{t('delivery')}</span><small>{t('noFlight')}</small></div>}
     </section>
     <ActionButton onClick={back}>{t('home')}</ActionButton>
@@ -242,11 +313,9 @@ function Reference({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
 export function Single(props: Props) {
   const { game, t, send, back } = props
   if (game.stage === 'results' && !game.playback) return <Results {...props} />
-  const work = currentWork(game)
-  const cost = work && workCost(game, work)
   const checks = currentEvidence(game)
   const editable = canConfigure(game)
-  const stage = game.playback?.kind === 'assembly' ? 'build' : game.playback?.kind === 'integration' ? 'integration' : game.stage
+  const stage = game.playback?.kind === 'assembly' ? 'build' : game.playback?.kind ?? game.stage
   const latestAnalysis = editable && game.analysis && ['analysisClear', 'analysisConflict'].includes(game.log.at(-1)?.id ?? '')
     && sameDesign(game.analysis.design, game.design) ? game.analysis : null
 
@@ -260,32 +329,28 @@ export function Single(props: Props) {
     <div className="mission-layout">
       <Lab game={game} t={t} send={send} />
       <div>
-    {!game.playback && <section className="next-decision decision-arrival" key={`${stage}:${game.returned}`}>
-      {stage === 'build' && <ReportCard speaker="assembly" t={t}><p>{t('reportBuild')}</p></ReportCard>}
-      {stage === 'integration' && <ReportCard speaker="test" t={t}>
-        <p>{t(game.evidence ? 'reviewRetest' : 'reportIntegration')}</p>
-      </ReportCard>}
-      {stage === 'review' && checks && (passes(checks)
-        ? <ReportCard speaker="review" t={t}><p>{t('reviewReady')}</p></ReportCard>
-        : <div>
-          <ReportCard speaker={!checks.powerPass ? 'power' : !checks.ditlPass ? 'comms' : 'science'} t={t} attention>
-            <Findings evidence={checks} t={t} />
-            {game.returned && <p>{t(!checks.powerPass ? 'labPowerFix' : !checks.ditlPass ? 'labTimingFix' : 'reportReviewBlocked')}</p>}
-          </ReportCard>
-        </div>)}
-      {editable && <Config game={game} t={t} send={send} />}
-      {latestAnalysis && <p className={latestAnalysis.forecast.deficit ? 'warning' : 'verified'} role="status">
-        {t(latestAnalysis.forecast.deficit ? 'analysisTradeoff' : 'analysisClear')}
-      </p>}
-      {game.returned && <Repair game={game} t={t} send={send} />}
-      {work && cost && <ActionButton disabled={!affordable(game, cost)}
-        onClick={() => send({ type: stage === 'build' || stage === 'integration' ? 'runLab' : 'work' })}>
-        {t(work === 'integrate' && game.evidence ? 'retest' : mission.costs[work].label)} <CostLabel t={t} {...cost} />
-      </ActionButton>}
-      {stage === 'review' && !game.returned && <ActionButton onClick={() => send({ type: 'review' })}>{t('submitReview')}</ActionButton>}
-      {stage === 'flight' && <Flight game={game} t={t} send={send} />}
-    </section>}
-    {!game.playback && <Reference key={stage} game={game} t={t} send={send} />}
+        {!game.playback && <section className="next-decision decision-arrival" key={`${stage}:${game.returned}`}>
+          {(stage === 'build' || stage === 'integration') && <BenchWork game={game} t={t} send={send} />}
+          {stage === 'review' && checks && (passes(checks)
+            ? <ReportCard speaker="review" t={t}>
+              <p>{t('reviewReady')}</p>
+              {game.testFocus && <p>{t(game.testFocus === 'imaging' ? 'focusImagingReport' : 'focusRadioReport', {
+                watts: scopeSegment(powerTimeline(checks.design), game.testFocus).watts, available: checks.available, batches: checks.batches,
+              })}</p>}
+            </ReportCard>
+            : <ReportCard speaker={!checks.powerPass ? 'power' : !checks.ditlPass ? 'comms' : 'science'} t={t} attention>
+              <Findings evidence={checks} t={t} />
+              {game.returned && <p>{t('labRepairChoice')}</p>}
+            </ReportCard>)}
+          {editable && <Config game={game} t={t} send={send} />}
+          {latestAnalysis && <p className={latestAnalysis.forecast.deficit ? 'warning' : 'verified'} role="status">
+            {t(latestAnalysis.forecast.deficit ? 'analysisTradeoff' : 'analysisClear')}
+          </p>}
+          {game.returned && <Repair game={game} t={t} send={send} />}
+          {stage === 'review' && !game.returned && <ActionButton onClick={() => send({ type: 'review' })}>{t('submitReview')}</ActionButton>}
+          {stage === 'flight' && <Flight game={game} t={t} send={send} />}
+        </section>}
+        {!game.playback && <Reference key={stage} game={game} t={t} send={send} />}
       </div>
     </div>
   </article>

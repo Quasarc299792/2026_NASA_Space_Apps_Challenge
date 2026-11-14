@@ -24,7 +24,7 @@ function session(game: Game | null, action: SessionAction) {
 }
 
 function Lobby({ t, game, open, resume, team }: { t: Translate; game: Game | null; open: () => void; resume: () => void; team: () => void }) {
-  const finished = game?.stage === 'results'
+  const finished = game?.stage === 'results' && !game.playback
   const inProgress = game !== null && !finished
   return <>
     <section className="lobby">
