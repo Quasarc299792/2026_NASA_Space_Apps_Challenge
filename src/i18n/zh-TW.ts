@@ -194,5 +194,8 @@ export const zhTW = {
   roomErrorStale: '提案已更新，請查看最新內容並重新選擇。',
   roomErrorWaiting: '需要先有一位隊友送出提案。',
   roomErrorNetwork: '無法連線到房間服務，請在網路可用時重試。',
+  eventChoose: '選擇',
+  unlockAfter: '達成「{mission}」最低要求後解鎖',
+  nextUnlocked: '已達成最低要求，大廳已解鎖「{mission}」。',
   artCredit: '地球影像：NASA Earth Observatory',
 } satisfies Record<Message, string>

@@ -74,6 +74,17 @@ npm exec -- firebase deploy --only firestore:rules,hosting --project YOUR_PROJEC
 - 在 [`src/missions/cubesat.ts`](src/missions/cubesat.ts) 調整初始配置、選項、成本、門檻和部門提案。變更多人提案 ID 或代提方案時，也需更新 [`firestore.rules`](firestore.rules) 並重跑 `npm run test:team`。
 - 入軌火箭、登月和團隊聲望目前有大廳入口。原型的實際操作範圍是立方衛星單人任務和多人整合審查。
 
+### 新增任務
+
+遊戲規則在 [`src/game/mission.ts`](src/game/mission.ts)，各任務共用。新增一個任務的步驟：
+
+1. 在 `src/missions/` 新增規則檔，匯出符合 [`MissionRules`](src/game/types.ts) 的物件。內容包括選項組 `groups`、各項工作的成本 `costs`、整合測試判定 `test`、補救方式 `remedies`、任務模擬 `fly`、結局文案 `outcomes`、聲望 `reputation`，以及可選的固定觸發事件 `events`。可以參考 [`cubesat.ts`](src/missions/cubesat.ts)。
+2. 在 [`src/missions/rules.ts`](src/missions/rules.ts) 的 `missionRules` 登記，`missionCatalog` 的順序就是解鎖順序。
+3. 新增對應的畫面元件（參考 [`cubesat-ui.tsx`](src/missions/cubesat-ui.tsx)），在 [`src/missions/index.ts`](src/missions/index.ts) 的 `missions` 登記。
+4. 文案加進兩份 i18n 字典。
+
+達成前一個任務的最低要求後，下一個任務才會解鎖。進度和聲望存在瀏覽器（`space-mission.progress.v1`）。事件觸發時，玩家要先做選擇才能繼續。選擇結果記在 `game.events`，規則可以用 `eventChoice` 讀取。任務 `records` 回傳的成果會帶進之後的任務（`game.records`），可以用來觸發邀約。
+
 [官方挑戰資源](https://www.spaceappschallenge.org/2026/challenges/space-mission-design-game/?tab=resources)列出《CubeSat 101》。大廳地球影像來自 [NASA Earth Observatory《Blue Marble 2002》](https://science.nasa.gov/resource/blue-marble-2002/)。
 
 ## 團隊共識草案

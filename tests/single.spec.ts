@@ -24,6 +24,8 @@ test('baseline mission launches and delivers the required data', async ({ page }
   await expect(page.getByRole('heading', { name: 'Design estimate' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Integration evidence' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Actual delivery' })).toBeVisible()
+  await page.getByRole('button', { name: 'Back to lobby' }).first().click()
+  await expect(page.getByText('Team reputation · 1')).toBeVisible()
 })
 
 test('a returned review can be fixed by the deadline, including language switch and reload', async ({ page }) => {

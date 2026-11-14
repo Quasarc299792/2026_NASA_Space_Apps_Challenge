@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Check, Radio, UsersRound } from 'lucide-react'
-import {
-  forecast, passes, resolveTeamReview, reviewDesign, type MultiplayerRemedy,
-} from '../game/mission'
+import { passes } from '../game/mission'
 import { readLocal, writeLocal } from '../game/storage'
 import type { Message, Translate } from '../i18n'
-import { cubeSat, departments, proposals, type Department } from '../missions/cubesat'
+import { cubeSatMission } from '../missions'
+import {
+  cubeSat, departments, forecast, proposals, resolveTeamReview, reviewDesign, type Department, type MultiplayerRemedy,
+} from '../missions/cubesat'
+import { PowerReadout, RemedyPreview } from '../missions/cubesat-ui'
 import { claimRole, confirmRoom, createRoom, openRoom, roomIdentity, RoomError, submitProposal, watchRoom } from '../multiplayer/client'
 import { activeRoomKey } from '../multiplayer/config'
 import { hasPlayerProposal, proposalFor, roleFor, roles, type Room } from '../multiplayer/model'
-import { ActionButton, Back, CostLabel, DesignTags, EvidenceReport, Heading, Metric, PowerReadout, RemedyPreview } from './shared'
+import { ActionButton, Back, CostLabel, DesignTags, Heading, Metric, ReportPanel } from './shared'
 
 const current = forecast(reviewDesign)
 const baseWeek = cubeSat.costs.assess.weeks + cubeSat.costs.freeze.weeks + cubeSat.costs.build.weeks + cubeSat.costs.integrate.weeks
@@ -113,7 +115,7 @@ function RoomResult({ room, t }: { room: Room; t: Translate }) {
         <small>{t('teamCosts')} · <CostLabel t={t} {...result} /></small>
       </div>
     </section>
-    <EvidenceReport t={t} evidence={{ ...result.evidence, week: baseWeek + result.weeks, revision: 1 }} />
+    <ReportPanel mission={cubeSatMission} t={t} evidence={{ ...result.evidence, week: baseWeek + result.weeks, revision: 1 }} />
   </>
 }
 
@@ -237,7 +239,7 @@ export default function Team({ t, back }: { t: Translate; back: () => void }) {
         <aside className="stack">
           <section className="panel">
             <h2>{t('teamCurrent')}</h2>
-            <DesignTags t={t} design={reviewDesign} />
+            <DesignTags mission={cubeSatMission} t={t} design={reviewDesign} />
             <PowerReadout t={t} estimate={current} />
           </section>
           <section className="panel">

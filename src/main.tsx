@@ -7,9 +7,12 @@ import '@fontsource/ibm-plex-mono/400.css'
 import './style.css'
 import earth from './assets/blue-marble.jpg'
 import { type Action, type Game, newGame, runMission } from './game/mission'
+import {
+  carriedRecords, completeMission, isUnlocked, nextMission, readProgress, reputation, writeProgress, type Progress,
+} from './game/progress'
 import { readGame, readLocal, writeGame, writeLocal } from './game/storage'
 import { languageKey, preferredLanguage, translator, type Language, type Translate } from './i18n'
-import { cubeSat, nextMissions } from './missions/cubesat'
+import { missionCatalog, missions } from './missions'
 import { Brief, Single } from './ui/Single'
 import { ActionButton } from './ui/shared'
 import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
@@ -17,13 +20,23 @@ import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 const Team = lazy(() => import('./ui/Team'))
 
 type Screen = 'lobby' | 'brief' | 'single' | 'team'
-type SessionAction = Action | { type: 'new' }
+type SessionAction = Action | { type: 'new'; missionId: string; records: string[] }
 
-function session(game: Game | null, action: SessionAction) {
-  return action.type === 'new' ? newGame() : game && runMission(game, action)
+const missionIcons: Record<string, typeof Satellite> = { cubesat: Satellite, 'orbital-launch': Rocket, 'lunar-mission': Moon }
+
+function playableNext(missionId: string) {
+  const next = nextMission(missionId)
+  return next && missions[next.id] ? next.title : null
 }
 
-function Lobby({ t, saved, open, resume, team }: { t: Translate; saved: boolean; open: () => void; resume: () => void; team: () => void }) {
+function session(game: Game | null, action: SessionAction) {
+  return action.type === 'new' ? newGame(action.missionId, action.records) : game && runMission(game, action)
+}
+
+function Lobby({ t, saved, progress, open, resume, team }: {
+  t: Translate; saved: boolean; progress: Progress; open: (missionId: string) => void; resume: () => void; team: () => void
+}) {
+  const first = missionCatalog[0].id
   return <>
     <section className="hero">
       <div className="earth-art" aria-hidden>
@@ -36,24 +49,26 @@ function Lobby({ t, saved, open, resume, team }: { t: Translate; saved: boolean;
         <h1>{t('heroTitle')}</h1>
         <p>{t('heroDetail')}</p>
         <div className="action-row">
-          <ActionButton onClick={saved ? resume : open}>{t(saved ? 'continue' : 'briefAction')}</ActionButton>
-          {saved && <button className="button secondary" onClick={open}>{t('newMission')}</button>}
+          <ActionButton onClick={saved ? resume : () => open(first)}>{t(saved ? 'continue' : 'briefAction')}</ActionButton>
+          {saved && <button className="button secondary" onClick={() => open(first)}>{t('newMission')}</button>}
         </div>
       </div>
       <a className="art-credit" href="https://science.nasa.gov/resource/blue-marble-2002/" target="_blank" rel="noreferrer">{t('artCredit')}</a>
     </section>
     <section className="mission-list" aria-labelledby="mission-selection">
-      <div className="row list-heading"><h2 id="mission-selection">{t('missionSelect')}</h2><small>{t('reputation')} · {t('planned')}</small></div>
+      <div className="row list-heading"><h2 id="mission-selection">{t('missionSelect')}</h2><small>{t('reputation')} · {reputation(progress)}</small></div>
       <div className="mission-cards">
-        <button className="mission-card available" onClick={open}>
-          <Satellite size={23} aria-hidden /><span><strong>{t('cubesat')}</strong>
-            <small><Clock3 size={13} aria-hidden /> {t('duration', { minutes: cubeSat.playMinutes })} · {t('single')}</small>
-          </span><ArrowRight size={18} aria-hidden />
-        </button>
-        {nextMissions.map(({ id, title }) => {
-          const Icon = id === 'orbital-launch' ? Rocket : Moon
+        {missionCatalog.map(({ id, title }, index) => {
+          const Icon = missionIcons[id] ?? Satellite
+          const mission = missions[id]
+          if (mission && isUnlocked(progress, id)) return <button className="mission-card available" key={id} onClick={() => open(id)}>
+            <Icon size={23} aria-hidden /><span><strong>{t(title)}</strong>
+              <small><Clock3 size={13} aria-hidden /> {t('duration', { minutes: mission.playMinutes })} · {t('single')}</small>
+            </span><ArrowRight size={18} aria-hidden />
+          </button>
+          const status = mission ? t('unlockAfter', { mission: t(missionCatalog[index - 1].title) }) : t('planned')
           return <div className="mission-card planned" key={id}>
-            <Icon size={23} aria-hidden /><span><strong>{t(title)}</strong><small>{t('planned')}</small></span><LockKeyhole size={15} aria-hidden />
+            <Icon size={23} aria-hidden /><span><strong>{t(title)}</strong><small>{status}</small></span><LockKeyhole size={15} aria-hidden />
           </div>
         })}
       </div>
@@ -71,6 +86,8 @@ function App() {
   const [language, setLanguage] = useState<Language>(preferredLanguage)
   const [screen, setScreen] = useState<Screen>(() => multiplayerAvailable && readLocal(activeRoomKey) ? 'team' : 'lobby')
   const [game, dispatch] = useReducer(session, null, readGame)
+  const [progress, setProgress] = useState(readProgress)
+  const [selected, setSelected] = useState(missionCatalog[0].id)
   const [saved, setSaved] = useState(true)
   const t = useMemo(() => translator(language), [language])
 
@@ -81,14 +98,23 @@ function App() {
   }, [language, t])
 
   useEffect(() => {
-    if (game) setSaved(writeGame(game))
+    if (!game) return
+    setSaved(writeGame(game))
+    setProgress(current => completeMission(current, game))
   }, [game])
+
+  useEffect(() => { writeProgress(progress) }, [progress])
 
   useEffect(() => { window.scrollTo(0, 0) }, [screen, game?.stage, game?.returned])
 
-  function begin() {
-    dispatch({ type: 'new' })
+  function begin(missionId: string) {
+    dispatch({ type: 'new', missionId, records: carriedRecords(progress) })
     setScreen('single')
+  }
+
+  function open(missionId: string) {
+    setSelected(missionId)
+    setScreen('brief')
   }
 
   function back() {
@@ -109,9 +135,10 @@ function App() {
     </header>
     <main className="shell">
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
-      {screen === 'lobby' && <Lobby t={t} saved={Boolean(game)} open={() => setScreen('brief')} resume={() => setScreen('single')} team={() => setScreen('team')} />}
-      {screen === 'brief' && <Brief t={t} saved={Boolean(game)} back={back} begin={begin} />}
-      {screen === 'single' && game && <Single game={game} send={dispatch} back={back} restart={begin} t={t} />}
+      {screen === 'lobby' && <Lobby t={t} saved={Boolean(game)} progress={progress} open={open} resume={() => setScreen('single')} team={() => setScreen('team')} />}
+      {screen === 'brief' && <Brief mission={missions[selected]} t={t} saved={Boolean(game)} back={back} begin={() => begin(selected)} />}
+      {screen === 'single' && game && <Single game={game} mission={missions[game.missionId]} send={dispatch} back={back}
+        restart={() => begin(game.missionId)} next={playableNext(game.missionId)} t={t} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
       <footer><Radio size={15} aria-hidden /> {t('challenge')}</footer>
     </main>

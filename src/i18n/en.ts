@@ -192,6 +192,9 @@ export const en = {
   roomErrorStale: 'The proposal changed. Review the latest options and select again.',
   roomErrorWaiting: 'A teammate needs to submit a proposal first.',
   roomErrorNetwork: 'Could not reach the room service. Try again when the connection is available.',
+  eventChoose: 'Choose',
+  unlockAfter: 'Meet the minimum goals of {mission} to unlock',
+  nextUnlocked: 'Minimum goals met. {mission} is now unlocked in the lobby.',
   artCredit: 'Earth imagery: NASA Earth Observatory',
 } as const
 
