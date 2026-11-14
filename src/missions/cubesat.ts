@@ -1,4 +1,8 @@
-import type { BenchLead, Design, Game, MissionRules, TestFocus } from '../game/types'
+import {
+  believedRisk, defectBelief, defectInFlight, detection, missionOdds, testResult, topLevel, untested,
+  type DefectState, type Maturity, type Outcome,
+} from '../game/risk'
+import type { BenchLead, Design, Evidence, Game, MissionRisks, MissionRules, RiskView, TestFocus } from '../game/types'
 
 export const cubeSat = {
   id: 'cubesat',
@@ -18,12 +22,12 @@ export const cubeSat = {
   downlinkWatts: 4,
   groundCapacity: 5,
   payloads: {
-    basic: { label: 'payloadBasic', description: 'payloadBasicDetail', watts: 3, batches: 2, cost: 14 },
-    advanced: { label: 'payloadAdvanced', description: 'payloadAdvancedDetail', watts: 7, batches: 5, cost: 21 },
+    basic: { label: 'payloadBasic', description: 'payloadBasicDetail', watts: 3, batches: 2, cost: 14, maturity: 'heritage' },
+    advanced: { label: 'payloadAdvanced', description: 'payloadAdvancedDetail', watts: 7, batches: 5, cost: 21, maturity: 'new' },
   },
   supplies: {
-    standard: { label: 'powerStandard', description: 'powerStandardDetail', watts: 10, cost: 12 },
-    reinforced: { label: 'powerReinforced', description: 'powerReinforcedDetail', watts: 14, cost: 22 },
+    standard: { label: 'powerStandard', description: 'powerStandardDetail', watts: 10, cost: 12, maturity: 'heritage' },
+    reinforced: { label: 'powerReinforced', description: 'powerReinforcedDetail', watts: 14, cost: 22, maturity: 'new' },
   },
   schedules: {
     overlap: { label: 'scheduleOverlap', description: 'scheduleOverlapDetail', batchLoss: 0, params: { count: 0 } },
@@ -51,6 +55,22 @@ export const cubeSat = {
     basic: { weeks: 1, credits: 10, label: 'remedyBasic' },
     reinforced: { weeks: 1, credits: 16, label: 'remedyReinforced' },
     compliant: { weeks: 1, credits: 5, label: 'remedyCompliant' },
+    // Risk verification rides along with the week's main work in this tutorial mission, so it costs budget and no weeks.
+    imagingAnalysis: { weeks: 0, credits: 4, label: 'riskImagingAnalysis' },
+    imagingBench: { weeks: 0, credits: 7, label: 'riskImagingBench' },
+    imagingRehearsal: { weeks: 0, credits: 12, label: 'riskImagingRehearsal' },
+    powerAnalysis: { weeks: 0, credits: 4, label: 'riskPowerAnalysis' },
+    powerLoadTest: { weeks: 0, credits: 7, label: 'riskPowerLoadTest' },
+    powerRehearsal: { weeks: 0, credits: 12, label: 'riskPowerRehearsal' },
+    fixImaging: { weeks: 1, credits: 5, label: 'riskFixImaging' },
+    fixPower: { weeks: 1, credits: 5, label: 'riskFixPower' },
+  },
+  // Two risk items, both degrading and neither fatal. Each either has a defect or not, drawn from the seed at the
+  // start. A defect that reaches orbit costs lostBatches observation batches. steps are the verification works for
+  // analysis, unit test and end-to-end test. The optional power and timing analysis also covers the analysis level of both.
+  risks: {
+    imaging: { label: 'riskImaging', detail: 'riskImagingDetail', failure: 'riskImagingFailure', option: 'payload', steps: ['imagingAnalysis', 'imagingBench', 'imagingRehearsal'], fix: 'fixImaging', lostBatches: 1 },
+    power: { label: 'riskPower', detail: 'riskPowerDetail', failure: 'riskPowerFailure', option: 'supply', steps: ['powerAnalysis', 'powerLoadTest', 'powerRehearsal'], fix: 'fixPower', lostBatches: 1 },
   },
 } as const
 
@@ -160,6 +180,78 @@ export function resolveTeamReview(remedy: MultiplayerRemedy) {
 }
 
 export type CubeSatGame = Game & { design: CubeSatDesign }
+export type CubeSatRisk = keyof typeof cubeSat.risks
+export const cubeSatRiskIds = Object.keys(cubeSat.risks) as CubeSatRisk[]
+
+// The imaging item follows the imager and the power item follows the supply. Each option has its own truth.
+export function riskIdentity(design: Design, risk: string): { item: string; maturity: Maturity } {
+  const { option } = cubeSat.risks[risk as CubeSatRisk]
+  const choice = design[option]
+  const maturity = (option === 'payload' ? cubeSat.payloads[choice as CubeSatDesign['payload']] : cubeSat.supplies[choice as CubeSatDesign['supply']]).maturity
+  return { item: `cubesat:${risk}:${choice}`, maturity }
+}
+
+function riskStates(game: Pick<Game, 'risks'>) {
+  return Object.fromEntries(cubeSatRiskIds.map(id => [id, game.risks[id] ?? untested])) as Record<CubeSatRisk, DefectState>
+}
+
+export function riskView(game: Pick<Game, 'design' | 'risks'>): RiskView[] {
+  const states = riskStates(game)
+  return cubeSatRiskIds.map(id => {
+    const { label, detail, failure, steps, fix } = cubeSat.risks[id]
+    const { maturity } = riskIdentity(game.design, id)
+    const state = states[id]
+    const work = state.level < topLevel ? steps[state.level] : null
+    return {
+      id, label, detail, failure, severity: 'degraded', maturity, state, risk: defectBelief(maturity, state),
+      next: work && !state.found && !state.fixed
+        ? { ...cubeSat.costs[work], work, passRisk: believedRisk(maturity, state.level + 1), missRate: 1 - detection[state.level + 1] } : null,
+      fix: { ...cubeSat.costs[fix], work: fix },
+    }
+  })
+}
+
+// Batches that reach the ground when the given risk items turn out defective.
+function batchesAfter(design: CubeSatDesign, failed: ReadonlySet<string>) {
+  const lost = cubeSatRiskIds.reduce((total, id) => total + (failed.has(id) ? cubeSat.risks[id].lostBatches : 0), 0)
+  const estimate = forecast(design)
+  const collected = cubeSat.payloads[design.payload].batches - cubeSat.schedules[design.schedule].batchLoss - lost
+  return Math.max(0, Math.min(collected, estimate.contactCapacity))
+}
+
+export function riskOdds(game: Pick<Game, 'design' | 'risks'>) {
+  return missionOdds(riskView(game), failed => batchesAfter(game.design as CubeSatDesign, failed) >= cubeSat.minimumBatches)
+}
+
+function defectsInFlight(game: Pick<Game, 'seed' | 'design' | 'risks'>) {
+  const states = riskStates(game)
+  return new Set<string>(cubeSatRiskIds.filter(id => {
+    const { item, maturity } = riskIdentity(game.design, id)
+    return defectInFlight(game.seed, item, maturity, states[id])
+  }))
+}
+
+export function riskOutcomes(game: Pick<Game, 'seed' | 'design' | 'risks'>): Outcome[] {
+  const failed = defectsInFlight(game)
+  return riskView(game).map(item => ({ id: item.id, believed: item.risk, failed: failed.has(item.id) }))
+}
+
+// For the debrief only, because it reads the truth: whether the next verification level would have found the defect.
+export function riskDebrief(game: Pick<Game, 'seed' | 'design' | 'risks'>, risk: string) {
+  const item = riskView(game).find(entry => entry.id === risk)
+  if (!item?.next) return null
+  const { item: id, maturity } = riskIdentity(game.design, risk)
+  return { ...item.next, found: testResult(game.seed, id, maturity, item.state.level + 1) === 'found' }
+}
+
+const cubeSatRisks: MissionRisks = {
+  identity: riskIdentity,
+  analysisCovers: cubeSatRiskIds,
+  view: riskView,
+  odds: riskOdds,
+  inFlight: (game, evidence) => ({ ...evidence, batches: Math.min(evidence.batches, batchesAfter(evidence.design as CubeSatDesign, defectsInFlight(game))) }) as Evidence,
+  outcomes: riskOutcomes,
+}
 
 export function planContact(evidence: Pick<CubeSatEvidence, 'design' | 'contactCapacity' | 'batches'>, choice: string) {
   const capacity = evidence.contactCapacity ?? forecast(evidence.design).contactCapacity
@@ -200,7 +292,9 @@ export const cubeSatRules: MissionRules = {
   },
   outcomes: { stopped: 'outcomeStopped', extra: 'outcomeExtra', success: 'outcomeSuccess', partial: 'outcomePartial' },
   reputation: { minimum: 1, stretch: 1 },
+  records: game => game.flight?.delivered && game.evidence?.checks.every(Boolean) ? ['cubesat:partnerVerified'] : [],
   flightChoices,
+  risks: cubeSatRisks,
   configurationSteps: { feasibility: ['payload', 'supply'], design: ['schedule', 'radio'] },
   labSteps: (game, kind) => kind === 'assembly' ? benchSequence(game.benchLead).length : powerTimeline(game.design as CubeSatDesign).length,
   contact: {

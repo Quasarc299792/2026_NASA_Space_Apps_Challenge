@@ -18,10 +18,17 @@ import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 const Team = lazy(() => import('./ui/Team'))
 
 type Screen = 'lobby' | 'brief' | 'single' | 'team'
-type SessionAction = Action | { type: 'new'; missionId: string; records: string[] }
+type SessionAction = Action | { type: 'new'; missionId: string; records: string[]; seed: number }
 
 function session(game: Game | null, action: SessionAction) {
-  return action.type === 'new' ? newGame(action.missionId, action.records) : game && runMission(game, action)
+  return action.type === 'new' ? newGame(action.missionId, action.records, action.seed) : game && runMission(game, action)
+}
+
+// Every run gets a seed. Add ?seed=123 to the address to replay a particular run.
+function runSeed() {
+  const requested = new URLSearchParams(window.location.search).get('seed')
+  if (requested && /^\d{1,9}$/.test(requested)) return Number(requested)
+  return crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000
 }
 
 function Lobby({ t, game, progress, open, resume, team }: {
@@ -55,7 +62,7 @@ function Lobby({ t, game, progress, open, resume, team }: {
       </button> : <Disclosure label={t('multiplayer')} value={t('teamSize')}><p>{t('roomDisabled')}</p></Disclosure>}
       <Disclosure label={t('availableMissions')} value={`${t('reputation')} · ${reputation(progress)}`}>
         <dl className="fact-list">
-          {missionCatalog.slice(1).map(({ id, title }, index) => <div key={id}>
+          {missionCatalog.slice(1).map(({ id, title }, index) => <div key={id} data-mission={id}>
             <dt>{t(title)}</dt>
             <dd>{!missions[id] ? t('planned') : isUnlocked(progress, id)
               ? <button className="text-button" onClick={() => open(id)}>{t('briefAction')}</button>
@@ -98,8 +105,15 @@ function App() {
   }
 
   function begin() {
-    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress) })
+    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: runSeed() })
     setScreen('single')
+  }
+
+  function replay(sameSeed: boolean) {
+    if (!game) return
+    dispatch({ type: 'new', missionId: game.missionId, records: game.records,
+      seed: sameSeed ? game.seed : crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000 })
+    window.scrollTo(0, 0)
   }
 
   function back() {
@@ -121,7 +135,7 @@ function App() {
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
       {screen === 'lobby' && <Lobby t={t} game={game} progress={progress} open={open} resume={() => setScreen('single')} team={() => setScreen('team')} />}
       {screen === 'brief' && <Brief mission={missions[selected]} t={t} saved={Boolean(game)} back={back} begin={begin} />}
-      {screen === 'single' && game && <Single game={game} mission={missions[game.missionId]} send={dispatch} back={back} t={t} />}
+      {screen === 'single' && game && <Single game={game} mission={missions[game.missionId]} send={dispatch} back={back} replay={replay} t={t} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
     </main>
   </>
