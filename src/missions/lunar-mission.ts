@@ -1,57 +1,56 @@
 import type { Message } from '../i18n/en'
 import {
-  defectBelief, defectInFlight, exceedChance, hiddenValue, knownRange, missionOdds, reviewRiskThreshold, testResult, topLevel, untested, verifyDefect,
-  type DefectState, type Maturity, type Outcome, type Range, type Severity,
+  defectBelief, defectInFlight, drawFromPool, hasDefect, missionOdds, reviewRiskThreshold, untested,
+  type DefectState, type Maturity, type Severity,
 } from '../game/risk'
 
-type Text = { label: Message; description: Message }
-type Work = { weeks: number; credits: number; label: Message }
+// Story design: docs/story/lunar-mission.md. Real mission references: docs/story/lunar-history.md (H01–H32).
+// Every number in this file is a game setting. The chapter is not wired into src/game/mission.ts yet.
+
 type Source = { source: string; url: string }
 
-type LunarShape = {
-  title: Message
-  brief: Message
-  payloads: Record<string, Text & { massKg: number; collectWindows: number; maxBatches: number; maturity: Maturity; cost: number }>
-  sensors: Record<string, Text & { massKg: number; backup: boolean; cost: number }>
-  powers: Record<string, Text & { massKg: number; nightWindows: number; cost: number }>
-  routes: Record<string, Text & { propellantKg: number; correctionKg: Range; maturity: Maturity; leadWeeks: number; cost: number }>
-  mounts: Record<string, Text & { interfaceKg: Range; cost: number; supportSlots: number }>
-  risks: Record<string, Text & { failure: Message; kind: 'value' | 'defect'; severity: Severity; segment: string; steps: readonly [string, string, string] }>
-  fixes: Record<string, Work & { description: Message }>
-  requires: Record<string, string>
-  partnerships: Record<string, Text & { weeks: number; advance: number; milestone: number; supportSlots: number; record: string | null }>
-  records: Record<string, { label: Message; from: string; partnership: string; advanceShift: number; supportSlots: number }>
-  supportUses: Record<string, { label: Message; weeksSaved: number; creditsSaved: number }>
-  events: Record<string, { label: Message; description: Message; afterWeek: number; deadlineChange: number }>
-  costs: Record<string, Work>
-  remedies: Record<string, Work & { description: Message; requires: Message }>
-  gates: Record<string, { work: readonly string[]; pass: Message }>
-  segments: readonly { id: string; label: Message; carried: Message }[]
-  surfacePlans: Record<string, Text & { reservedWindows: number; deliverAll: boolean }>
-  outcomes: Record<string, Text>
-  sources: Record<string, Source>
+// What a card choice or a failure response changes. Anything that needs more than a number is handled by `id` in the rules.
+type Effect = { weeks?: number; credits?: number; deadline?: number; massKg?: number; propellantKg?: number; windows?: number; slots?: number }
+type Choice<C extends string, P extends string> = { id: C; label: `${P}${C}`; detail: `${P}${C}Detail`; result: `${P}${C}Result`; effect: Effect }
+type Card<I extends string, C extends string> = {
+  id: I; title: `lunarCard${I}`; detail: `lunarCard${I}Story`; quote: `lunarCard${I}Quote`; file: `lunarCard${I}File`
+  history: readonly string[]; choices: readonly Choice<C, `lunarCard${I}`>[]
+}
+
+// Card IDs and choice IDs are spelled the way they appear in the text keys, so the keys can be derived and type-checked.
+function card<I extends string, const C extends Record<string, Effect>>(id: I, history: readonly string[], choices: C): Card<I, keyof C & string> {
+  return {
+    id, title: `lunarCard${id}`, detail: `lunarCard${id}Story`, quote: `lunarCard${id}Quote`, file: `lunarCard${id}File`, history,
+    choices: Object.entries(choices).map(([choice, effect]) => ({ id: choice, label: `lunarCard${id}${choice}`, detail: `lunarCard${id}${choice}Detail`, result: `lunarCard${id}${choice}Result`, effect })) as never,
+  }
+}
+function responses<I extends string, const C extends Record<string, Effect>>(id: I, choices: C): readonly Choice<keyof C & string, `lunarRisk${I}`>[] {
+  return Object.entries(choices).map(([choice, effect]) => ({ id: choice, label: `lunarRisk${id}${choice}`, detail: `lunarRisk${id}${choice}Detail`, result: `lunarRisk${id}${choice}Result`, effect })) as never
 }
 
 export const lunarMission = {
   id: 'lunar-mission',
   title: 'lunar',
   brief: 'lunarBriefStory',
-  deadline: 20,
+  deadline: 26,
   budget: 150,
-  playMinutes: '15–25',
+  playMinutes: '30',
   minimumBatches: 1,
   stretchBatches: 2,
   initialDesign: { payload: 'basic', sensor: 'single', power: 'dayOnly', route: 'direct', mount: 'standard' },
 
   // Mass budget. Propellant loaded = launchAllocationKg − dry mass, so every kilogram of dry mass costs a kilogram of propellant.
+  // The margin left after the route's need is the propellant the flight spends on corrections and responses.
   launchAllocationKg: 500,
-  busDryKg: 184,
+  busDryKg: 190,
+  reserveKg: 10,
 
   // Surface timeline, counted in operations windows across one lunar day.
-  daylightWindows: 4,
-  degradedWindows: 2,
+  daylightWindows: 3,
+  tiltedWindows: 2,
   downlinkWindows: 1,
-  surfaceLossWindows: 1,
+  wakeWindows: 2,
+  wakeCredits: 10,
 
   payloads: {
     basic: { label: 'lunarPayloadBasic', description: 'lunarPayloadBasicDetail', massKg: 20, collectWindows: 2, maxBatches: 2, maturity: 'heritage', cost: 20 },
@@ -62,47 +61,31 @@ export const lunarMission = {
     redundant: { label: 'lunarSensorRedundant', description: 'lunarSensorRedundantDetail', massKg: 12, backup: true, cost: 24 },
   },
   powers: {
-    dayOnly: { label: 'lunarPowerDayOnly', description: 'lunarPowerDayOnlyDetail', massKg: 0, nightWindows: 0, cost: 0 },
-    extended: { label: 'lunarPowerExtended', description: 'lunarPowerExtendedDetail', massKg: 12, nightWindows: 2, cost: 16 },
+    dayOnly: { label: 'lunarPowerDayOnly', description: 'lunarPowerDayOnlyDetail', massKg: 0, nightWindows: 0, maturity: 'new', cost: 0 },
+    extended: { label: 'lunarPowerExtended', description: 'lunarPowerExtendedDetail', massKg: 12, nightWindows: 2, maturity: 'heritage', cost: 16 },
   },
   routes: {
-    direct: { label: 'lunarRouteDirect', description: 'lunarRouteDirectDetail', propellantKg: 270, correctionKg: { min: 0, max: 19 }, maturity: 'heritage', leadWeeks: 0, cost: 0 },
-    lowEnergy: { label: 'lunarRouteLowEnergy', description: 'lunarRouteLowEnergyDetail', propellantKg: 252, correctionKg: { min: 0, max: 25 }, maturity: 'new', leadWeeks: 2, cost: 6 },
+    direct: { label: 'lunarRouteDirect', description: 'lunarRouteDirectDetail', propellantKg: 270, correctionKg: 6, leadWeeks: 0, cost: 0 },
+    lowEnergy: { label: 'lunarRouteLowEnergy', description: 'lunarRouteLowEnergyDetail', propellantKg: 258, correctionKg: 4, leadWeeks: 2, cost: 6 },
   },
-  // interfaceKg is the range of as-built mass the payload interface adds. The true value is hidden: the trade study
-  // halves the range and the integration weighing reveals it. The lightweight mount is paid for with credits or with
-  // one partner support slot.
+  // growthKg is the as-built mass the payload interface adds when it is weighed at integration.
+  // The lightweight mount is paid for with credits or with one partner support slot.
   mounts: {
-    standard: { label: 'lunarMountStandard', description: 'lunarMountStandardDetail', interfaceKg: { min: 10, max: 20 }, cost: 0, supportSlots: 0 },
-    lightweight: { label: 'lunarMountLightweight', description: 'lunarMountLightweightDetail', interfaceKg: { min: 1, max: 4 }, cost: 16, supportSlots: 1 },
+    standard: { label: 'lunarMountStandard', description: 'lunarMountStandardDetail', growthKg: 10, cost: 0, supportSlots: 0 },
+    lightweight: { label: 'lunarMountLightweight', description: 'lunarMountLightweightDetail', growthKg: 2, cost: 16, supportSlots: 1 },
   },
 
-  // Flight risk items. Each truth is drawn from the seed at the start. steps are the works that verify the item by
-  // analysis, unit test and end-to-end test, in order. Verification never changes the truth, only what the player knows.
-  // correction is a hidden value: fatal when the transfer needs more than the propellant margin. landing and surface
-  // either have a defect or not. A landing defect is fatal with a single sensor and a tilted landing with the backup.
-  // A surface defect costs surfaceLossWindows operations windows. The landing is always a new design.
-  // The surface item follows the payload and the correction follows the route.
-  risks: {
-    correction: { label: 'lunarRiskCorrection', description: 'lunarRiskCorrectionDetail', failure: 'lunarRiskCorrectionFailure', kind: 'value', severity: 'fatal', segment: 'transfer', steps: ['navAnalysis', 'thrusterTest', 'navRehearsal'] },
-    landing: { label: 'lunarRiskLanding', description: 'lunarRiskLandingDetail', failure: 'lunarRiskLandingFailure', kind: 'defect', severity: 'fatal', segment: 'landing', steps: ['descentSim', 'sensorTest', 'rehearse'] },
-    surface: { label: 'lunarRiskSurface', description: 'lunarRiskSurfaceDetail', failure: 'lunarRiskSurfaceFailure', kind: 'defect', severity: 'degraded', segment: 'surface', steps: ['thermalAnalysis', 'thermalTest', 'dayRehearsal'] },
-  },
-  // What a found defect costs to fix. A fix changes the truth: the item is then clean.
-  // A correction need above the reserve is answered with the remedies below or by changing the design before the freeze.
-  fixes: {
-    landing: { weeks: 1, credits: 6, label: 'lunarFixLanding', description: 'lunarFixLandingDetail' },
-    surface: { weeks: 1, credits: 6, label: 'lunarFixSurface', description: 'lunarFixSurfaceDetail' },
-  },
-  // Unit tests need the frozen design. End-to-end tests need the built lander, or the ground system for the surface day.
-  requires: { thrusterTest: 'freeze', sensorTest: 'freeze', thermalTest: 'freeze', navRehearsal: 'buildFlight', rehearse: 'buildFlight', dayRehearsal: 'buildGround' },
-
-  // Offers stay open until PDR. Contract weeks use main-work turns and must be delivered before FRR.
+  // Offers stay open until PDR. Contract weeks use main-work turns and must be delivered or ended before FRR.
   // The advance is paid on signing. The milestone payment and support slots arrive on delivery.
   partnerships: {
     funding: { label: 'lunarOfferFunding', description: 'lunarOfferFundingDetail', weeks: 2, advance: 40, milestone: 20, supportSlots: 0, record: 'onTime' },
     tech: { label: 'lunarOfferTech', description: 'lunarOfferTechDetail', weeks: 3, advance: 0, milestone: 0, supportSlots: 3, record: 'verified' },
     decline: { label: 'lunarOfferDecline', description: 'lunarOfferDeclineDetail', weeks: 0, advance: 0, milestone: 0, supportSlots: 0, record: null },
+  },
+  // Stand-in contracts offered at the second invitation and when a partner withdraws. Their labels are the choices of those cards.
+  latePartnerships: {
+    funding: { weeks: 2, advance: 30, milestone: 0, supportSlots: 0 },
+    tech: { weeks: 2, advance: 0, milestone: 0, supportSlots: 1 },
   },
   // Track records from the orbital launch chapter. Each improves one offer and is never required to pass.
   records: {
@@ -113,13 +96,29 @@ export const lunarMission = {
     buildFlight: { label: 'lunarSupportBuildFlight', weeksSaved: 1, creditsSaved: 10 },
     integrate: { label: 'lunarSupportIntegrate', weeksSaved: 1, creditsSaved: 10 },
     mount: { label: 'lunarSupportMount', weeksSaved: 0, creditsSaved: 16 },
-    // One verification step run at the partner's facility. It still takes its week and costs nothing.
+    // One verification step at the partner's facility: it still takes its week and costs no credits.
     verify: { label: 'lunarSupportVerify', weeksSaved: 0, creditsSaved: 0 },
   },
 
-  events: {
-    pullIn: { label: 'lunarEventPullInTitle', description: 'lunarEventPullInStory', afterWeek: 4, deadlineChange: -2 },
+  // Risk items. Each has a truth drawn from the seed at the start: defect or no defect. Verification looks at it.
+  // steps are the works that take the item to analysis, unit test and end-to-end test. Nothing is rolled in flight:
+  // a defect that was never fixed shows up at the item's segment. severity is the default; lunarSeverity applies the
+  // two exceptions (a single altimeter makes descent fatal, switching off fault protection makes thrusters fatal).
+  // The payload and night items take their maturity from the chosen hardware, see lunarMaturity.
+  risks: {
+    software: { label: 'lunarRiskSoftware', description: 'lunarRiskSoftwareDetail', failure: 'lunarRiskSoftwareFailure', quote: 'lunarRiskSoftwareQuote', file: 'lunarRiskSoftwareFile', found: 'lunarFoundSoftware', kind: 'chance', severity: 'degraded', maturity: 'new', segment: 'checkout', steps: ['softwareAnalysis', 'softwareBench', 'missionSim'], unitNeeds: 'buildGround', history: ['H09', 'H10', 'H11'] },
+    pressure: { label: 'lunarRiskPressure', description: 'lunarRiskPressureDetail', failure: 'lunarRiskPressureFailure', quote: 'lunarRiskPressureQuote', file: 'lunarRiskPressureFile', found: 'lunarFoundPressure', kind: 'chance', severity: 'degraded', maturity: 'heritage', segment: 'transfer', steps: ['leakAnalysis', 'leakCheck', 'hotfire'], unitNeeds: 'buildFlight', history: ['H12', 'H14', 'H18'] },
+    thrusters: { label: 'lunarRiskThrusters', description: 'lunarRiskThrustersDetail', failure: 'lunarRiskThrustersFailure', quote: 'lunarRiskThrustersQuote', file: 'lunarRiskThrustersFile', found: 'lunarFoundThrusters', kind: 'chance', severity: 'degraded', maturity: 'heritage', segment: 'orbit', steps: ['thrusterAnalysis', 'thrusterTest', 'attitudeTest'], unitNeeds: 'buildFlight', history: ['H13', 'H15', 'H16', 'H17'] },
+    descent: { label: 'lunarRiskDescent', description: 'lunarRiskDescentDetail', failure: 'lunarRiskDescentFailure', quote: 'lunarRiskDescentQuote', file: 'lunarRiskDescentFile', found: 'lunarFoundDescent', kind: 'chance', severity: 'degraded', maturity: 'new', segment: 'descent', steps: ['descentSim', 'sensorTest', 'rehearse'], unitNeeds: 'buildFlight', history: ['H20', 'H21', 'H22', 'H23'] },
+    payload: { label: 'lunarRiskPayload', description: 'lunarRiskPayloadDetail', failure: 'lunarRiskPayloadFailure', quote: 'lunarRiskPayloadQuote', file: 'lunarRiskPayloadFile', found: 'lunarFoundPayload', kind: 'chance', severity: 'degraded', maturity: 'heritage', segment: 'surface', steps: ['dataAnalysis', 'payloadCheck', 'payloadTest'], unitNeeds: 'buildPayload', history: ['H04', 'H25', 'H26'] },
+    night: { label: 'lunarRiskNight', description: 'lunarRiskNightDetail', failure: 'lunarRiskNightFailure', quote: 'lunarRiskNightQuote', file: 'lunarRiskNightFile', found: 'lunarFoundNight', kind: 'chance', severity: 'degraded', maturity: 'new', segment: 'night', steps: ['thermalAnalysis', 'batteryTest', 'thermalVac'], unitNeeds: 'buildFlight', history: ['H28', 'H29', 'H30'] },
   },
+  // An option that skips or voids a check adds a second, unseen source of defects to the item, drawn at this maturity's chance.
+  exposedChance: 'heritage',
+  // Closing texts treat an item as looked at when it was verified to this level or fixed.
+  checkedLevel: 2,
+  // After a test reports a defect: fixing it takes this much. Redesigns are the remedies addLidar, basicPayload and dropKit.
+  fix: { weeks: 1, credits: 8, label: 'lunarFoundFix' },
 
   costs: {
     contract: { weeks: 1, credits: 0, label: 'lunarContractWork' },
@@ -128,21 +127,32 @@ export const lunarMission = {
     prelim: { weeks: 1, credits: 8, label: 'lunarPrelim' },
     detail: { weeks: 1, credits: 8, label: 'lunarDetail' },
     freeze: { weeks: 1, credits: 10, label: 'lunarFreeze' },
-    buildFlight: { weeks: 3, credits: 34, label: 'lunarBuildFlight' },
+    buildFlight: { weeks: 3, credits: 30, label: 'lunarBuildFlight' },
     buildPayload: { weeks: 2, credits: 16, label: 'lunarBuildPayload' },
-    buildGround: { weeks: 1, credits: 10, label: 'lunarBuildGround' },
-    integrate: { weeks: 2, credits: 24, label: 'lunarIntegrate' },
-    navAnalysis: { weeks: 1, credits: 4, label: 'lunarNavAnalysis' },
-    thrusterTest: { weeks: 1, credits: 8, label: 'lunarThrusterTest' },
-    navRehearsal: { weeks: 1, credits: 12, label: 'lunarNavRehearsal' },
-    descentSim: { weeks: 1, credits: 4, label: 'lunarDescentSim' },
-    sensorTest: { weeks: 1, credits: 8, label: 'lunarSensorTest' },
-    rehearse: { weeks: 1, credits: 10, label: 'lunarRehearse' },
-    thermalAnalysis: { weeks: 1, credits: 4, label: 'lunarThermalAnalysis' },
-    thermalTest: { weeks: 1, credits: 8, label: 'lunarThermalTest' },
-    dayRehearsal: { weeks: 1, credits: 10, label: 'lunarDayRehearsal' },
+    buildGround: { weeks: 1, credits: 8, label: 'lunarBuildGround' },
+    integrate: { weeks: 2, credits: 20, label: 'lunarIntegrate' },
     retest: { weeks: 1, credits: 10, label: 'lunarRetest' },
+    secondInterface: { weeks: 1, credits: 0, label: 'lunarSecondInterface' },
     wait: { weeks: 1, credits: 0, label: 'lunarWait' },
+    // Verification ladder: analysis after MDR, unit test after the item's hardware is built, end-to-end after integration.
+    softwareAnalysis: { weeks: 1, credits: 3, label: 'lunarVerifySoftware1' },
+    softwareBench: { weeks: 1, credits: 6, label: 'lunarVerifySoftware2' },
+    missionSim: { weeks: 1, credits: 10, label: 'lunarVerifySoftware3' },
+    leakAnalysis: { weeks: 1, credits: 3, label: 'lunarVerifyPressure1' },
+    leakCheck: { weeks: 1, credits: 6, label: 'lunarVerifyPressure2' },
+    hotfire: { weeks: 1, credits: 10, label: 'lunarVerifyPressure3' },
+    thrusterAnalysis: { weeks: 1, credits: 3, label: 'lunarVerifyThrusters1' },
+    thrusterTest: { weeks: 1, credits: 6, label: 'lunarVerifyThrusters2' },
+    attitudeTest: { weeks: 1, credits: 10, label: 'lunarVerifyThrusters3' },
+    descentSim: { weeks: 1, credits: 3, label: 'lunarVerifyDescent1' },
+    sensorTest: { weeks: 1, credits: 6, label: 'lunarVerifyDescent2' },
+    rehearse: { weeks: 1, credits: 10, label: 'lunarVerifyDescent3' },
+    dataAnalysis: { weeks: 1, credits: 3, label: 'lunarVerifyPayload1' },
+    payloadCheck: { weeks: 1, credits: 6, label: 'lunarVerifyPayload2' },
+    payloadTest: { weeks: 1, credits: 10, label: 'lunarVerifyPayload3' },
+    thermalAnalysis: { weeks: 1, credits: 3, label: 'lunarVerifyNight1' },
+    batteryTest: { weeks: 1, credits: 6, label: 'lunarVerifyNight2' },
+    thermalVac: { weeks: 1, credits: 10, label: 'lunarVerifyNight3' },
   },
   // Changes after CDR. Any remedy applied after integration makes the evidence stale and needs a retest.
   remedies: {
@@ -151,37 +161,133 @@ export const lunarMission = {
     dropKit: { weeks: 1, credits: 0, label: 'lunarRemedyDropKit', description: 'lunarRemedyDropKitDetail', requires: 'lunarRequiresKit' },
     reroute: { weeks: 1, credits: 6, label: 'lunarRemedyReroute', description: 'lunarRemedyRerouteDetail', requires: 'lunarRequiresLead' },
     basicPayload: { weeks: 1, credits: 8, label: 'lunarRemedyBasicPayload', description: 'lunarRemedyBasicPayloadDetail', requires: 'lunarRequiresAdvanced' },
+    addLidar: { weeks: 1, credits: 12, label: 'lunarRemedyAddLidar', description: 'lunarRemedyAddLidarDetail', requires: 'lunarRequiresSingle' },
   },
 
-  // PDR needs the best-case margin (low end of the interface range) to cover the low end of the correction range.
-  // FRR needs current integration evidence, a delivered contract, the weighed margin covering the low end of the
-  // correction range, and a signed acceptance for every believed risk above reviewRiskThreshold, which includes a
-  // defect that a test found and the player chose not to fix.
+  // PDR also needs estimated margin ≥ reserveKg. FRR needs current integration evidence, loaded propellant ≥ route need,
+  // a delivered or ended contract, margin ≥ reserveKg (waivable while ≥ 0) and a signature for every flight risk
+  // believed above reviewRiskThreshold or known to have an unfixed defect.
   gates: {
     MDR: { work: ['assess'], pass: 'lunarMdrPass' },
     PDR: { work: ['prelim'], pass: 'lunarPdrPass' },
     CDR: { work: ['detail', 'freeze'], pass: 'lunarCdrPass' },
     FRR: { work: ['buildFlight', 'buildPayload', 'buildGround', 'integrate'], pass: 'lunarFrrPass' },
   },
+  waivers: {
+    reserve: { label: 'lunarWaiverReserve', description: 'lunarWaiverReserveDetail' },
+  },
+
+  // Storyline events. They fire on a fixed condition and are not drawn.
+  storyEvents: [
+    card('Camera', ['H27'], { Mount: { credits: 8, massKg: 2 }, Room: { credits: 3 }, Decline: {} }),
+    card('Review', ['H32'], { UseSlot: { slots: -1 }, Note: {} }),
+    card('SecondOffer', ['H01', 'H14'], { Funding: { credits: 30 }, Tech: {}, Government: { credits: 30, massKg: 8 }, Alone: {} }),
+  ],
+  secondOfferWeek: 8,
+
+  // External event pool. One development card turns up after each of drawWeeks, PullIn always in the first two.
+  // One launch card and one cruise card are drawn in flight. Imaging is offered only after a loss with no engineering data.
+  drawWeeks: [4, 10, 16],
+  devCards: [
+    card('PullIn', ['H03'], { Accept: { deadline: -2, credits: 12 }, Compromise: { deadline: -1 }, Refuse: { credits: -10 } }),
+    card('PartnerExit', ['H01'], { Accept: {}, Switch: {}, Negotiate: { weeks: 1 } }),
+    card('CostReview', ['H02'], { Grant: { credits: 16 }, Cut: {}, Stop: {} }),
+    card('SecondPayload', ['H14'], { Accept: { credits: 30, massKg: 8 }, Light: { credits: 18, massKg: 4 }, Decline: {} }),
+    card('SupplierDelay', ['H02'], { Wait: { weeks: 1 }, Rush: { credits: -8 }, Stock: { massKg: 4 } }),
+    card('LauncherSlip', ['H02'], { Follow: { deadline: 2, credits: -6 }, Keep: {} }),
+    card('PartsAlert', ['H16'], { Inspect: { weeks: 1, credits: -4 }, Partner: { slots: -1 }, Fly: {} }),
+    card('IcdMismatch', ['H09', 'H11'], { Review: { weeks: 1 }, Skip: {} }),
+  ],
+  launchCards: [
+    card('Scrub', ['H05', 'H07'], { Wait: { credits: -8 }, Rush: {} }),
+    card('Weather', ['H06'], { Rollback: { credits: -6 }, Slip: { propellantKg: -2 } }),
+    card('Lightning', ['H08'], { Check: { propellantKg: -2 }, Press: {}, Switch: {} }),
+  ],
+  cruiseCards: [
+    card('Eclipse', ['H09', 'H27'], { Shelter: { windows: -1 }, Battery: { windows: -1 }, Exposed: {} }),
+    card('CruiseScience', ['H14'], { On: { credits: -4 }, Off: {} }),
+  ],
+  lossCards: [
+    card('Imaging', ['H24'], { Share: {}, Decline: {} }),
+  ],
+
+  // What the player can do when an item's defect shows up in flight. The night item has no response: the lander does not wake.
+  responses: {
+    software: responses('Software', { Uplink: { credits: -6 }, Wait: { propellantKg: -4 }, Disable: {} }),
+    pressure: responses('Pressure', { Emergency: { propellantKg: 4 }, Continue: {}, Flyby: {}, Diagnose: {} }),
+    thrusters: responses('Thrusters', { Simulate: { credits: -6, propellantKg: -2 }, Reverse: { propellantKg: -6 }, Flyby: {} }),
+    descent: responses('Descent', { Patch: { propellantKg: -3 }, Switch: {}, Abort: {} }),
+    payload: responses('Payload', { Restart: { windows: -1 }, LowRate: {}, Engineering: {} }),
+  },
+  pressureLossKg: 8,
+  // Uplink costs nothing after the interface review and this much more when the mismatch was left open.
+  uplinkOpenExtra: 4,
+
   segments: [
     { id: 'launch', label: 'lunarLaunchTitle', carried: 'lunarLaunchCarried' },
+    { id: 'checkout', label: 'lunarCheckoutTitle', carried: 'lunarCheckoutCarried' },
     { id: 'transfer', label: 'lunarTransferTitle', carried: 'lunarTransferCarried' },
-    { id: 'landing', label: 'lunarLandingTitle', carried: 'lunarLandingCarried' },
+    { id: 'orbit', label: 'lunarOrbitTitle', carried: 'lunarOrbitCarried' },
+    { id: 'descent', label: 'lunarLandingTitle', carried: 'lunarLandingCarried' },
     { id: 'surface', label: 'lunarSurfaceTitle', carried: 'lunarSurfaceCarried' },
+    { id: 'night', label: 'lunarNightTitle', carried: 'lunarNightCarried' },
   ],
   surfacePlans: {
     priority: { label: 'lunarSurfacePriority', description: 'lunarSurfacePriorityDetail', reservedWindows: 0, deliverAll: false },
     extra: { label: 'lunarSurfaceExtra', description: 'lunarSurfaceExtraDetail', reservedWindows: 0, deliverAll: true },
     diagnostics: { label: 'lunarSurfaceDiagnostics', description: 'lunarSurfaceDiagnosticsDetail', reservedWindows: 2, deliverAll: true },
   },
-
-  outcomes: {
-    extra: { label: 'lunarOutcomeExtra', description: 'lunarOutcomeExtraDetail' },
-    success: { label: 'lunarOutcomeSuccess', description: 'lunarOutcomeSuccessDetail' },
-    noData: { label: 'lunarOutcomeNoData', description: 'lunarOutcomeNoDataDetail' },
-    lost: { label: 'lunarOutcomeLost', description: 'lunarOutcomeLostDetail' },
-    stopped: { label: 'lunarOutcomeStopped', description: 'lunarOutcomeStoppedDetail' },
+  nightPlans: {
+    rest: { label: 'lunarNightRest', description: 'lunarNightRestDetail' },
+    wake: { label: 'lunarNightWake', description: 'lunarNightWakeDetail' },
   },
+
+  // Ending matrix: mission result × what the team is left with.
+  outcomes: {
+    stopped: { label: 'lunarOutcomeStopped', description: 'lunarOutcomeStoppedDetail' },
+    lost: { label: 'lunarOutcomeLost', description: 'lunarOutcomeLostDetail' },
+    salvage: { label: 'lunarOutcomeSalvage', description: 'lunarOutcomeSalvageDetail' },
+    noData: { label: 'lunarOutcomeNoData', description: 'lunarOutcomeNoDataDetail' },
+    success: { label: 'lunarOutcomeSuccess', description: 'lunarOutcomeSuccessDetail' },
+    extra: { label: 'lunarOutcomeExtra', description: 'lunarOutcomeExtraDetail' },
+  },
+  closings: {
+    deadline: { label: 'lunarClosingDeadline', description: 'lunarClosingDeadlineText' },
+    funds: { label: 'lunarClosingFunds', description: 'lunarClosingFundsText' },
+    cancelled: { label: 'lunarClosingCancelled', description: 'lunarClosingCancelledText' },
+    missed: { label: 'lunarClosingMissed', description: 'lunarClosingMissedText' },
+    listed: { label: 'lunarClosingListed', description: 'lunarClosingListedText' },
+    tradeoff: { label: 'lunarClosingTradeoff', description: 'lunarClosingTradeoffText' },
+    checked: { label: 'lunarClosingChecked', description: 'lunarClosingCheckedText' },
+    unchecked: { label: 'lunarClosingUnchecked', description: 'lunarClosingUncheckedText' },
+    recovered: { label: 'lunarClosingRecovered', description: 'lunarClosingRecoveredText' },
+  },
+  endings: [
+    { outcome: 'stopped', closing: 'deadline', text: 'lunarEndingStoppedDeadline' },
+    { outcome: 'stopped', closing: 'funds', text: 'lunarEndingStoppedFunds' },
+    { outcome: 'stopped', closing: 'cancelled', text: 'lunarEndingStoppedCancelled' },
+    { outcome: 'lost', closing: 'missed', text: 'lunarEndingLostMissed' },
+    { outcome: 'lost', closing: 'listed', text: 'lunarEndingLostListed' },
+    { outcome: 'salvage', closing: 'missed', text: 'lunarEndingSalvageMissed' },
+    { outcome: 'salvage', closing: 'listed', text: 'lunarEndingSalvageListed' },
+    { outcome: 'noData', closing: 'missed', text: 'lunarEndingNoDataMissed' },
+    { outcome: 'noData', closing: 'listed', text: 'lunarEndingNoDataListed' },
+    { outcome: 'noData', closing: 'tradeoff', text: 'lunarEndingNoDataTradeoff' },
+    { outcome: 'success', closing: 'checked', text: 'lunarEndingSuccessChecked' },
+    { outcome: 'success', closing: 'unchecked', text: 'lunarEndingSuccessUnchecked' },
+    { outcome: 'success', closing: 'recovered', text: 'lunarEndingSuccessRecovered' },
+    { outcome: 'extra', closing: 'checked', text: 'lunarEndingExtraChecked' },
+    { outcome: 'extra', closing: 'unchecked', text: 'lunarEndingExtraUnchecked' },
+    { outcome: 'extra', closing: 'recovered', text: 'lunarEndingExtraRecovered' },
+  ],
+  // Lines added after the closing text. They never change which ending it is.
+  tags: {
+    renewed: 'lunarTagRenewed', coauthor: 'lunarTagCoauthor', independent: 'lunarTagIndependent', ended: 'lunarTagEnded',
+    hosted: 'lunarTagHosted', distant: 'lunarTagDistant', engineering: 'lunarTagEngineering', cruiseData: 'lunarTagCruiseData',
+    siteConfirmed: 'lunarTagSiteConfirmed', accepted: 'lunarTagAccepted',
+  },
+  // Texts for the test stories of act two.
+  testStories: { noResources: 'lunarTestNoResources', better: 'lunarTestBetter', clean: 'lunarTestClean', missed: 'lunarTestMissed', flyKnown: 'lunarFoundFly', redesign: 'lunarFoundRedesign' },
 
   sources: {
     segments: { source: 'NASA, Design and Develop Science Missions, slide 8', url: 'https://www.nasa.gov/wp-content/uploads/2025/04/250323-design-and-develop-science-mission.pdf#page=8' },
@@ -194,12 +300,76 @@ export const lunarMission = {
     integration: { source: 'NASA CubeSat 101 §2.11', url: 'https://science.nasa.gov/wp-content/uploads/2023/06/nasa_csli_cubesat_101_508.pdf#page=33' },
     retest: { source: 'NASA CubeSat 101 §6.9.1–6.9.2', url: 'https://science.nasa.gov/wp-content/uploads/2023/06/nasa_csli_cubesat_101_508.pdf#page=69' },
     reviews: { source: 'NASA NPR 7123.1D Appendix G', url: 'https://nodis3.gsfc.nasa.gov/displayDir.cfm?Internal_ID=N_PR_7123_001D_&page_name=AppendixG' },
-    propulsionLoss: { source: 'NASA, Science, Data Collection Ongoing Aboard Peregrine Mission One', url: 'https://www.nasa.gov/blogs/missions/2024/01/11/nasa-science-data-collection-ongoing-aboard-peregrine-mission-one/' },
-    landingSensor: { source: 'NASA, Tech Contributes to Soft Moon Landing', url: 'https://www.nasa.gov/news-release/nasa-tech-contributes-to-soft-moon-landing-agency-science-underway/' },
-    tiltedLanding: { source: 'NASA Receives Some Data Before Intuitive Machines Ends Lunar Mission', url: 'https://www.nasa.gov/news-release/nasa-receives-some-data-before-intuitive-machines-ends-lunar-mission/' },
-    lunarDay: { source: 'NASA Science Continues After Firefly’s First Moon Mission Concludes', url: 'https://www.nasa.gov/news-release/nasa-science-continues-after-fireflys-first-moon-mission-concludes/' },
-  },
-} as const satisfies LunarShape & Record<string, unknown>
+    verification: { source: 'NASA Systems Engineering Handbook §5.3', url: 'https://www.nasa.gov/reference/5-3-product-verification/' },
+    riskAcceptance: { source: 'NASA Systems Engineering Handbook §6.4', url: 'https://www.nasa.gov/reference/6-4-technical-risk-management/' },
+    // Mission files. Keys match docs/story/lunar-history.md.
+    H01: { source: 'NASA, Commercial Lunar Payload Services Update (Orbit Beyond, 2019)', url: 'https://www.nasa.gov/commercial-lunar-payload-services/commercial-lunar-payload-services-update/' },
+    H02: { source: 'NASA Ends VIPER Project, Continues Moon Exploration (2024)', url: 'https://www.nasa.gov/news-release/nasa-ends-viper-project-continues-moon-exploration/' },
+    H03: { source: 'NASA Administrator Statement on Return to Moon in Next Five Years (2019)', url: 'https://www.nasa.gov/news-release/nasa-administrator-statement-on-return-to-moon-in-next-five-years/' },
+    H04: { source: 'NSSDCA, Ranger 6 (1964)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1964-007A' },
+    H05: { source: 'NASA, Artemis I Launch Attempt Scrubbed (2022)', url: 'https://www.nasa.gov/blogs/missions/2022/09/03/artemis-i-launch-attempt-scrubbed/' },
+    H06: { source: 'NASA, Artemis I Moon Rocket Departs Launch Pad 39B Ahead of Hurricane Ian (2022)', url: 'https://www.nasa.gov/blogs/missions/2022/09/26/artemis-i-moon-rocket-departs-launch-pad-39b-ahead-of-hurricane-ian/' },
+    H07: { source: 'NASA, Intuitive Machines, SpaceX Move Moon Mission (2024)', url: 'https://www.nasa.gov/blogs/artemis/2024/02/13/carrying-nasa-science-intuitive-machines-spacex-move-moon-mission' },
+    H08: { source: 'NASA, 50 Years Ago: Return to the Moon (Apollo 12, 1969)', url: 'https://www.nasa.gov/history/50-years-ago-return-to-the-moon/' },
+    H09: { source: 'NASA NTRS 20150022370, The Use of Standards on the LADEE Mission', url: 'https://ntrs.nasa.gov/api/citations/20150022370/downloads/20150022370.pdf' },
+    H10: { source: 'NASA Science, Lunar Trailblazer Moon Mission Ends (2025)', url: 'https://science.nasa.gov/blogs/lunar-trailblazer/2025/08/05/nasas-lunar-trailblazer-moon-mission-ends/' },
+    H11: { source: 'NASA, Mission Team Determines Cause of Communications Issues for CAPSTONE (2022)', url: 'https://www.nasa.gov/blogs/missions/2022/07/07/mission-team-determines-cause-of-communications-issues-for-nasas-capstone/' },
+    H12: { source: 'NASA Science, LCROSS (2009)', url: 'https://science.nasa.gov/mission/lcross/' },
+    H13: { source: 'NSSDCA, Surveyor 2 (1966)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1966-084A' },
+    H14: { source: 'NASA Science, Astrobotic Peregrine Mission One Concludes (2024)', url: 'https://www.nasa.gov/news-release/nasa-science-astrobotic-peregrine-mission-one-concludes/' },
+    H15: { source: 'NASA, CAPSTONE Team Stops Spacecraft Spin (2022)', url: 'https://www.nasa.gov/blogs/missions/2022/10/07/capstone-team-stops-spacecraft-spin-clearing-hurdle-to-recovery/' },
+    H16: { source: 'JPL, NASA Calls End to Lunar Flashlight After Some Tech Successes (2023)', url: 'https://www.jpl.nasa.gov/news/nasa-calls-end-to-lunar-flashlight-after-some-tech-successes/' },
+    H17: { source: 'NASA Science, LunaH-Map Mission Ends (2023)', url: 'https://science.nasa.gov/blogs/lunah-map/2023/08/03/nasas-lunah-map-mission-ends-validates-science-instrument-performance/' },
+    H18: { source: 'NSSDCA, Surveyor 5 (1967)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1967-084A' },
+    H20: { source: 'NASA, Apollo 14 Demonstrated Spaceflight Challenges Are Solvable (1971)', url: 'https://www.nasa.gov/missions/apollo/apollo-14/apollo-14-demonstrated-spaceflight-challenges-are-solvable/' },
+    H21: { source: 'NASA NTRS 20240004236, Navigation Doppler Lidar on IM-1 (2024)', url: 'https://ntrs.nasa.gov/api/citations/20240004236/downloads/MSS%202024_NDL%20Lunar%20Mission.pdf' },
+    H22: { source: 'NSSDCA, Surveyor 3 (1967)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1967-035A' },
+    H23: { source: 'NSSDCA, Surveyor 4 (1967)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1967-068A' },
+    H24: { source: 'NASA, LRO Views Impact Site of HAKUTO-R Mission 1 Moon Lander (2023)', url: 'https://www.nasa.gov/centers-and-facilities/goddard/nasas-lro-views-impact-site-of-hakuto-r-mission-1-moon-lander/' },
+    H25: { source: 'NASA Collects First Surface Science in Decades via Commercial Moon Mission (IM-1, 2024)', url: 'https://www.nasa.gov/missions/artemis/clps/nasa-collects-first-surface-science-in-decades-via-commercial-moon-mission/' },
+    H26: { source: 'NASA Receives Some Data Before Intuitive Machines Ends Lunar Mission (IM-2, 2025)', url: 'https://www.nasa.gov/news-release/nasa-receives-some-data-before-intuitive-machines-ends-lunar-mission/' },
+    H27: { source: 'NASA Science Continues After Firefly’s First Moon Mission Concludes (Blue Ghost 1, 2025)', url: 'https://www.nasa.gov/news-release/nasa-science-continues-after-fireflys-first-moon-mission-concludes/' },
+    H28: { source: 'NSSDCA, Surveyor 1 (1966)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1966-045A' },
+    H29: { source: 'NSSDCA, Surveyor 3 (1967)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1967-035A' },
+    H30: { source: 'NSSDCA, Surveyor 5 (1967)', url: 'https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1967-084A' },
+    H32: { source: 'NASA Identifies Cause of Artemis I Orion Heat Shield Char Loss (2024)', url: 'https://www.nasa.gov/missions/artemis/nasa-identifies-cause-of-artemis-i-orion-heat-shield-char-loss/' },
+  } satisfies Record<string, Source>,
+} as const
+
+export type LunarDesign = {
+  payload: keyof typeof lunarMission.payloads
+  sensor: keyof typeof lunarMission.sensors
+  power: keyof typeof lunarMission.powers
+  route: keyof typeof lunarMission.routes
+  mount: keyof typeof lunarMission.mounts
+}
+export type LunarRisk = keyof typeof lunarMission.risks
+export type LunarStates = Record<LunarRisk, DefectState>
+export type LunarPlan = keyof typeof lunarMission.surfacePlans
+export type LunarOutcome = keyof typeof lunarMission.outcomes
+export type LunarClosing = keyof typeof lunarMission.closings
+
+// Type checks: every text key exists in the dictionaries, and cards line up with the engine's event shape.
+type Values<T> = T[keyof T]
+type AnyCard = typeof lunarMission.storyEvents[number] | typeof lunarMission.devCards[number] | typeof lunarMission.launchCards[number]
+  | typeof lunarMission.cruiseCards[number] | typeof lunarMission.lossCards[number]
+type AnyChoice = AnyCard['choices'][number] | Values<typeof lunarMission.responses>[number]
+type Keys = AnyCard['title' | 'detail' | 'quote' | 'file'] | AnyChoice['label' | 'detail' | 'result']
+  | Values<typeof lunarMission.costs>['label'] | typeof lunarMission.fix.label
+  | Values<typeof lunarMission.risks>['label' | 'description' | 'failure' | 'quote' | 'file' | 'found']
+  | typeof lunarMission.endings[number]['text'] | Values<typeof lunarMission.tags> | Values<typeof lunarMission.testStories>
+  | Values<typeof lunarMission.closings>['label' | 'description'] | Values<typeof lunarMission.outcomes>['label' | 'description']
+  | typeof lunarMission.segments[number]['label' | 'carried'] | Values<typeof lunarMission.nightPlans>['label' | 'description']
+  | Values<typeof lunarMission.surfacePlans>['label' | 'description'] | Values<typeof lunarMission.waivers>['label' | 'description']
+  | Values<typeof lunarMission.remedies>['label' | 'description' | 'requires'] | Values<typeof lunarMission.supportUses>['label']
+  | Values<typeof lunarMission.payloads | typeof lunarMission.sensors | typeof lunarMission.powers | typeof lunarMission.routes | typeof lunarMission.mounts | typeof lunarMission.partnerships>['label' | 'description']
+  | Values<typeof lunarMission.records>['label'] | Values<typeof lunarMission.gates>['pass'] | typeof lunarMission.title | typeof lunarMission.brief
+type Missing = Exclude<Keys, Message>
+const everyKeyExists: [Missing] extends [never] ? true : Missing = true
+void everyKeyExists
+// Cards carry the fields of MissionEvent that need no engine state: id, title, detail and choices with id, label, detail.
+type EventShape = { id: string; title: Message; detail: Message; choices: readonly { id: string; label: Message; detail: Message }[] }
+void (lunarMission.devCards satisfies readonly EventShape[])
 
 export const lunarDepartments = ['science', 'flight', 'dynamics', 'ground'] as const
 export type LunarDepartment = typeof lunarDepartments[number]
@@ -210,128 +380,226 @@ export const lunarProposals = {
   ground: { label: 'lunarGround', options: ['dropKit', 'reroute'], fallback: 'reroute', brief: 'lunarGroundBrief' },
 } as const satisfies Record<LunarDepartment, { label: Message; options: readonly (keyof typeof lunarMission.remedies)[]; fallback: keyof typeof lunarMission.remedies; brief: Message }>
 
-export type LunarDesign = {
-  payload: keyof typeof lunarMission.payloads
-  sensor: keyof typeof lunarMission.sensors
-  power: keyof typeof lunarMission.powers
-  route: keyof typeof lunarMission.routes
-  mount: keyof typeof lunarMission.mounts
-}
-export type LunarRisk = keyof typeof lunarMission.risks
-export type LunarDefect = keyof typeof lunarMission.fixes
-export type LunarPlan = keyof typeof lunarMission.surfacePlans
-// What the player has learned so far. interface: 0 before the trade study, 1 after it, topLevel once the assembled
-// spacecraft has been weighed. correction: the verification level reached.
-export type LunarKnowledge = { interface: number; correction: number; landing: DefectState; surface: DefectState }
+// --- Rules ---
+
 export const lunarRiskIds = Object.keys(lunarMission.risks) as LunarRisk[]
-export const lunarUnknown: LunarKnowledge = { interface: 0, correction: 0, landing: untested, surface: untested }
+// Items every flight depends on. The night item only matters when the player tries to wake the lander.
+export const lunarFlightRisks = ['software', 'pressure', 'thrusters', 'descent', 'payload'] as const satisfies readonly LunarRisk[]
+export const lunarUntested = (): LunarStates => ({ software: untested, pressure: untested, thrusters: untested, descent: untested, payload: untested, night: untested })
 
-// True values fixed by the seed. Each mount and each route has its own.
-export function lunarInterface(seed: number, mount: LunarDesign['mount']) {
-  return hiddenValue(seed, `lunar:interface:${mount}`, lunarMission.mounts[mount].interfaceKg)
+// The payload and the night item belong to the chosen hardware, so a redesign brings a new truth.
+export function lunarItemId(design: LunarDesign, id: LunarRisk) {
+  return id === 'payload' ? `lunar:payload:${design.payload}` : id === 'night' ? `lunar:night:${design.power}` : `lunar:${id}`
 }
-export function lunarCorrection(seed: number, route: LunarDesign['route']) {
-  return hiddenValue(seed, `lunar:correction:${route}`, lunarMission.routes[route].correctionKg)
+export function lunarMaturity(design: LunarDesign, id: LunarRisk): Maturity {
+  return id === 'payload' ? lunarMission.payloads[design.payload].maturity : id === 'night' ? lunarMission.powers[design.power].maturity : lunarMission.risks[id].maturity
 }
-
-// Each sensor set and each payload is its own item with its own truth.
-export function lunarDefectItem(design: LunarDesign, id: LunarDefect) {
-  return id === 'landing'
-    ? { item: `lunar:landing:${design.sensor}`, maturity: 'new' as Maturity }
-    : { item: `lunar:surface:${design.payload}`, maturity: lunarMission.payloads[design.payload].maturity as Maturity }
-}
-
-// Runs the next verification level on a defect item and returns the new state.
-export function verifyLunar(seed: number, design: LunarDesign, id: LunarDefect, state: DefectState) {
-  const { item, maturity } = lunarDefectItem(design, id)
-  return verifyDefect(seed, item, maturity, state)
+// Redundancy does not change the truth. A backup lidar turns a descent defect from fatal into a tilted landing.
+export function lunarSeverity(design: LunarDesign, id: LunarRisk, protectionOff = false): Severity {
+  if (id === 'descent') return lunarMission.sensors[design.sensor].backup ? 'degraded' : 'fatal'
+  if (id === 'thrusters' && protectionOff) return 'fatal'
+  return lunarMission.risks[id].severity
 }
 
-// Propellant margin for a given interface mass.
-export function lunarMargin(design: LunarDesign, interfaceKg: number) {
+export function lunarMass(design: LunarDesign, extraKg = 0, measured = true) {
   const dry = lunarMission.busDryKg + lunarMission.payloads[design.payload].massKg + lunarMission.sensors[design.sensor].massKg
-    + lunarMission.powers[design.power].massKg + interfaceKg
+    + lunarMission.powers[design.power].massKg + (measured ? lunarMission.mounts[design.mount].growthKg : 0) + extraKg
   const loaded = lunarMission.launchAllocationKg - dry
   return { dry, loaded, margin: loaded - lunarMission.routes[design.route].propellantKg }
 }
 
-export function lunarInterfaceKnown(seed: number, design: LunarDesign, known: LunarKnowledge) {
-  return knownRange(lunarMission.mounts[design.mount].interfaceKg, lunarInterface(seed, design.mount), known.interface)
+// What the workbench shows: the player's belief for each item, never the truth.
+export function lunarRisks(design: LunarDesign, states: LunarStates, protectionOff = false) {
+  return lunarRiskIds.map(id => ({ id, level: states[id].level, maturity: lunarMaturity(design, id), severity: lunarSeverity(design, id, protectionOff), risk: defectBelief(lunarMaturity(design, id), states[id]) }))
+}
+// Forecast from beliefs. `minimum` here is the chance that nothing fatal happens and no flight item fails at all.
+export function lunarOdds(design: LunarDesign, states: LunarStates) {
+  return missionOdds(lunarRisks(design, states).filter(item => item.id !== 'night'))
+}
+// Items the player has to sign for at flight review: believed above the threshold, which includes a known unfixed defect.
+export function lunarAcceptance(design: LunarDesign, states: LunarStates) {
+  return lunarFlightRisks.filter(id => defectBelief(lunarMaturity(design, id), states[id]) > reviewRiskThreshold)
 }
 
-// What the workbench shows for each item: the player's current belief, not the truth.
-// Before the weighing, the correction belief is averaged over the interface range still open.
-export function lunarRisks(seed: number, design: LunarDesign, known: LunarKnowledge) {
-  const route = lunarMission.routes[design.route]
-  const iface = lunarInterfaceKnown(seed, design, known)
-  const correction = knownRange(route.correctionKg, lunarCorrection(seed, design.route), known.correction)
-  let risk = 0
-  for (let kg = iface.min; kg <= iface.max; kg += 1) risk += exceedChance(correction, lunarMargin(design, kg).margin) / (iface.max - iface.min + 1)
-  const backup = lunarMission.sensors[design.sensor].backup
-  const surface = lunarDefectItem(design, 'surface').maturity
+// External events. Verification never changes these draws.
+export function lunarDevCards(seed: number) {
+  const pullInSlot = drawFromPool(seed, 'lunar:pullIn', [0, 1])!
+  const pool: string[] = lunarMission.devCards.map(item => item.id).filter(id => id !== 'PullIn')
+  return lunarMission.drawWeeks.map((_, slot) => {
+    if (slot === pullInSlot) return 'PullIn'
+    const drawn = drawFromPool(seed, `lunar:dev:${slot}`, pool)!
+    pool.splice(pool.indexOf(drawn), 1)
+    return drawn
+  }) as (typeof lunarMission.devCards[number]['id'])[]
+}
+export function lunarFlightCards(seed: number) {
   return {
-    correction: { id: 'correction', level: known.correction, maturity: route.maturity as Maturity, severity: 'fatal' as Severity, known: correction, limit: lunarMargin(design, iface.max).margin, risk },
-    landing: { id: 'landing', level: known.landing.level, maturity: 'new' as Maturity, severity: (backup ? 'degraded' : 'fatal') as Severity, found: known.landing.found, fixed: known.landing.fixed, risk: defectBelief('new', known.landing) },
-    surface: { id: 'surface', level: known.surface.level, maturity: surface, severity: 'degraded' as Severity, found: known.surface.found, fixed: known.surface.fixed, risk: defectBelief(surface, known.surface) },
+    launch: drawFromPool(seed, 'lunar:launch', lunarMission.launchCards.map(item => item.id))!,
+    cruise: drawFromPool(seed, 'lunar:cruise', lunarMission.cruiseCards.map(item => item.id))!,
   }
 }
 
-// Best case still open: lightest interface against the smallest correction. Negative means known to fail.
-export function lunarBestMargin(seed: number, design: LunarDesign, known: LunarKnowledge) {
-  const risks = lunarRisks(seed, design, known)
-  return lunarMargin(design, lunarInterfaceKnown(seed, design, known).min).margin - risks.correction.known.min
+export type LunarSetup = {
+  design: LunarDesign
+  states: LunarStates
+  marginKg: number
+  credits: number
+  secondPayload?: boolean
+  icd?: 'reviewed' | 'open'
 }
+// The player's choice at a card, a failure response, the surface plan or the night. `options` lists what is available now.
+export type LunarPick = (prompt: string, options: readonly string[], view: { spareKg: number; credits: number; windows: number }) => string
+export type LunarStep = { segment: string; prompt?: string; choice?: string; failed?: LunarRisk; spareKg: number; credits: number }
 
-export function lunarBatches(design: LunarDesign, plan: LunarPlan, failed: ReadonlySet<string>) {
+// Seven-step flight. Nothing is rolled: card draws and every item's truth come from the seed, the rest is fixed rules.
+export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
+  const { design, states } = setup
+  const cards = lunarFlightCards(seed)
   const payload = lunarMission.payloads[design.payload]
-  const windows = (failed.has('landing') ? lunarMission.degradedWindows : lunarMission.daylightWindows) + lunarMission.powers[design.power].nightWindows
-    - (failed.has('surface') ? lunarMission.surfaceLossWindows : 0) - lunarMission.surfacePlans[plan].reservedWindows
-  const batches = Math.max(0, Math.min(payload.maxBatches, Math.floor(windows / (payload.collectWindows + lunarMission.downlinkWindows))))
-  return { windows: Math.max(0, windows), batches: lunarMission.surfacePlans[plan].deliverAll ? batches : Math.min(batches, lunarMission.minimumBatches) }
-}
+  const backup = lunarMission.sensors[design.sensor].backup
+  const exposed = new Set<LunarRisk>()
+  const failures: LunarRisk[] = []
+  const flown: LunarRisk[] = []
+  const steps: LunarStep[] = []
+  let spareKg = setup.marginKg
+  let credits = setup.credits
+  let windows = 0
+  let segment = 'launch'
+  let protectionOff = false
+  let cruiseData = false
+  let payloadChecked = false
+  let engineering = false
+  let correctionExtra = 0
+  let nightWindows: number = lunarMission.powers[design.power].nightWindows
 
-// The forecast is built from the player's beliefs and assumes every surface window goes to science.
-export function lunarOdds(seed: number, design: LunarDesign, known: LunarKnowledge) {
-  return missionOdds(Object.values(lunarRisks(seed, design, known)), failed => lunarBatches(design, 'extra', failed).batches >= lunarMission.minimumBatches)
-}
-
-// Items the player has to sign for at flight review.
-export function lunarAcceptance(seed: number, design: LunarDesign, known: LunarKnowledge) {
-  const risks = lunarRisks(seed, design, known)
-  return lunarRiskIds.filter(id => risks[id].risk > reviewRiskThreshold)
-}
-
-// For the debrief: the next verification step for an item and what it would have told the player.
-// It reads the truth, so it must not be shown on the workbench. null at the top level or once a defect is found.
-export function lunarNextStep(seed: number, design: LunarDesign, known: LunarKnowledge, id: LunarRisk) {
-  const state = id === 'correction' ? null : known[id]
-  const level = state ? state.level : known.correction
-  if (level >= topLevel || state?.found || state?.fixed) return null
-  const work = lunarMission.risks[id].steps[level] as keyof typeof lunarMission.costs
-  const { weeks, credits } = lunarMission.costs[work]
-  if (id !== 'correction') {
-    const { item, maturity } = lunarDefectItem(design, id)
-    return { work, weeks, credits, found: testResult(seed, item, maturity, level + 1) === 'found', known: null }
+  const effect = (list: readonly { id: string; effect: Effect }[], id: string) => list.find(item => item.id === id)!.effect
+  const apply = (change: Effect) => { credits += change.credits ?? 0; spareKg += change.propellantKg ?? 0; windows += change.windows ?? 0 }
+  const ask = (prompt: string, options: readonly string[]) => {
+    const choice = pick(prompt, options, { spareKg, credits, windows })
+    if (!options.includes(choice)) throw new Error(`${prompt}: ${choice} is not available`)
+    steps.push({ segment, prompt, choice, spareKg, credits })
+    return choice
   }
-  const next = lunarRisks(seed, design, { ...known, correction: level + 1 }).correction
-  return { work, weeks, credits, found: next.risk === 1, known: next.known }
-}
+  // A defect shows up when the truth has one that was never fixed, or when a skipped check let a second one through.
+  const defect = (id: LunarRisk) => {
+    const item = lunarItemId(design, id)
+    flown.push(id)
+    const there = defectInFlight(seed, item, lunarMaturity(design, id), states[id]) || (exposed.has(id) && hasDefect(seed, `${item}:exposed`, lunarMission.exposedChance))
+    if (there) steps.push({ segment, failed: id, spareKg, credits })
+    if (there && id !== 'night') failures.push(id)
+    return there
+  }
+  const checked = (id: LunarRisk) => !exposed.has(id) && (states[id].fixed || (!states[id].found && states[id].level >= lunarMission.checkedLevel))
+  const end = (outcome: LunarOutcome, critical: LunarRisk | 'reserve' | 'choice', batches = 0, upright = false) => {
+    let closing: LunarClosing
+    if (outcome === 'success' || outcome === 'extra') closing = failures.length ? 'recovered' : flown.filter(id => !checked(id)).length <= 1 ? 'checked' : 'unchecked'
+    else if (critical === 'choice') closing = 'tradeoff'
+    else if (critical === 'reserve') closing = 'listed'
+    else closing = checked(critical) ? 'missed' : 'listed'
+    return { outcome, closing, critical, upright, batches, segment, failures, flown, steps, spareKg, credits, cruiseData, engineering, protectionOff, secondPayloadUsable: Boolean(setup.secondPayload) && upright, cards }
+  }
+  const lost = (critical: LunarRisk | 'reserve') => end(cruiseData ? 'salvage' : 'lost', critical)
 
-// Nothing is rolled here. The flight plays out the truths drawn at the start of the run.
-export function flyLunar(seed: number, design: LunarDesign, known: LunarKnowledge, plan: LunarPlan) {
-  const risks = lunarRisks(seed, design, known)
-  const margin = lunarMargin(design, lunarInterface(seed, design.mount)).margin
-  const correction = lunarCorrection(seed, design.route)
-  const outcomes: Outcome[] = [{ id: 'correction', believed: risks.correction.risk, failed: correction > margin, value: correction, limit: margin }]
-  const lost = (stop: string) => ({ outcomes, margin, correction, tilted: false, windows: 0, delivered: 0, outcome: 'lost', stop }) as const
-  if (correction > margin) return lost('transfer')
-  const defective = (id: LunarDefect) => { const { item, maturity } = lunarDefectItem(design, id); return defectInFlight(seed, item, maturity, known[id]) }
-  const tilted = defective('landing')
-  outcomes.push({ id: 'landing', believed: risks.landing.risk, failed: tilted })
-  if (tilted && !lunarMission.sensors[design.sensor].backup) return lost('landing')
-  outcomes.push({ id: 'surface', believed: risks.surface.risk, failed: defective('surface') })
-  const failed = new Set(outcomes.filter(item => item.failed).map(item => item.id))
-  const { windows, batches } = lunarBatches(design, plan, failed)
-  const outcome = batches >= lunarMission.stretchBatches ? 'extra' : batches >= lunarMission.minimumBatches ? 'success' : 'noData'
-  return { outcomes, margin, correction, tilted, windows, delivered: batches, outcome, stop: '' } as const
+  // 1 Launch
+  const launch = lunarMission.launchCards.find(item => item.id === cards.launch)!
+  if (launch.id === 'Scrub') {
+    const choice = ask('card:Scrub', credits >= 8 ? ['Wait', 'Rush'] : ['Rush'])
+    if (choice === 'Rush') exposed.add('software'); else apply(effect(launch.choices, choice))
+  } else if (launch.id === 'Weather') {
+    const choice = ask('card:Weather', credits >= 6 ? ['Rollback', 'Slip'] : ['Slip'])
+    if (choice === 'Slip') correctionExtra = 2; else apply(effect(launch.choices, choice))
+  } else {
+    const choice = ask('card:Lightning', states.software.level >= 3 && !states.software.found ? ['Check', 'Press', 'Switch'] : ['Check', 'Press'])
+    if (choice === 'Press') exposed.add('software'); else apply(effect(launch.choices, choice))
+  }
+
+  // 2 Earth-orbit checkout
+  segment = 'checkout'
+  if (defect('software')) {
+    const cost = setup.icd === 'reviewed' ? 0 : 6 + (setup.icd === 'open' ? lunarMission.uplinkOpenExtra : 0)
+    const choice = ask('risk:software', credits >= cost ? ['Uplink', 'Wait', 'Disable'] : ['Wait', 'Disable'])
+    if (choice === 'Uplink') credits -= cost
+    else if (choice === 'Wait') apply(effect(lunarMission.responses.software, choice))
+    else protectionOff = true
+  }
+
+  // 3 Lunar transfer
+  segment = 'transfer'
+  if (cards.cruise === 'CruiseScience') {
+    const choice = ask('card:CruiseScience', credits >= 4 ? ['On', 'Off'] : ['Off'])
+    if (choice === 'On') { credits -= 4; cruiseData = true; payloadChecked = true }
+  }
+  spareKg -= lunarMission.routes[design.route].correctionKg + correctionExtra
+  if (defect('pressure')) {
+    spareKg -= lunarMission.pressureLossKg
+    const choice = ask('risk:pressure', spareKg >= 0 ? ['Emergency', 'Continue', 'Flyby', 'Diagnose'] : ['Emergency', 'Flyby', 'Diagnose'])
+    if (choice === 'Emergency') { apply(effect(lunarMission.responses.pressure, choice)); exposed.add('descent') }
+    else if (choice === 'Flyby') return end('salvage', 'pressure')
+    else if (choice === 'Diagnose') { engineering = true; return end('lost', 'pressure') }
+  }
+
+  // 4 Lunar orbit insertion
+  segment = 'orbit'
+  if (spareKg < 0) return lost(failures.at(-1) ?? 'reserve')
+  if (defect('thrusters')) {
+    if (lunarSeverity(design, 'thrusters', protectionOff) === 'fatal') return lost('thrusters')
+    const choice = ask('risk:thrusters', [...(credits >= 6 && spareKg >= 2 ? ['Simulate'] : []), ...(spareKg >= 6 ? ['Reverse'] : []), 'Flyby'])
+    if (choice === 'Flyby') return end('salvage', 'thrusters')
+    apply(effect(lunarMission.responses.thrusters, choice))
+  }
+
+  // 5 Descent
+  segment = 'descent'
+  let upright = true
+  if (defect('descent')) {
+    if (!backup) return lost('descent')
+    const choice = ask('risk:descent', spareKg >= 3 ? ['Patch', 'Switch', 'Abort'] : ['Switch', 'Abort'])
+    if (choice === 'Abort') return end('salvage', 'descent')
+    if (choice === 'Patch') { apply(effect(lunarMission.responses.descent, choice)); upright = states.descent.level >= lunarMission.checkedLevel && !exposed.has('descent') }
+    else upright = false
+  }
+  windows = upright ? lunarMission.daylightWindows : lunarMission.tiltedWindows
+
+  // 6 First lunar day
+  segment = 'surface'
+  if (cards.cruise === 'Eclipse') {
+    const choice = ask('card:Eclipse', nightWindows > 0 ? ['Shelter', 'Battery', 'Exposed'] : ['Shelter', 'Exposed'])
+    if (choice === 'Shelter') windows -= 1
+    else if (choice === 'Battery') nightWindows -= 1
+    else exposed.add('payload')
+  }
+  windows += nightWindows
+  let downlink: number = lunarMission.downlinkWindows
+  if (defect('payload')) {
+    const choice = ask('risk:payload', ['Restart', 'LowRate', 'Engineering'])
+    if (choice === 'Restart') windows -= payloadChecked ? 0 : 1
+    else if (choice === 'LowRate') downlink += 1
+    else { engineering = true; return end('noData', 'payload', 0, upright) }
+  }
+  const plan = ask('plan', Object.keys(lunarMission.surfacePlans)) as LunarPlan
+  const reserved = lunarMission.surfacePlans[plan].reservedWindows
+  if (reserved) engineering = true
+  const usable = Math.max(0, windows - reserved)
+  const each = payload.collectWindows + downlink
+  const possible = Math.min(payload.maxBatches, Math.floor(usable / each))
+  let batches = lunarMission.surfacePlans[plan].deliverAll ? possible : Math.min(possible, lunarMission.minimumBatches)
+  let left = usable - batches * each
+
+  // 7 Lunar night
+  segment = 'night'
+  if (upright && credits >= lunarMission.wakeCredits && ask('night', ['rest', 'wake']) === 'wake') {
+    credits -= lunarMission.wakeCredits
+    if (!defect('night')) {
+      left += lunarMission.wakeWindows
+      const more = Math.min(payload.maxBatches - batches, Math.floor(left / each))
+      batches += more
+      left -= more * each
+    }
+  }
+  if (batches === 0) {
+    const byChoice = reserved > 0 && Math.floor(windows / each) >= 1
+    return end('noData', byChoice ? 'choice' : !upright ? 'descent' : failures.at(-1) ?? 'choice', 0, upright)
+  }
+  const extra = batches >= lunarMission.stretchBatches || (Boolean(setup.secondPayload) && upright)
+  return end(extra ? 'extra' : 'success', 'choice', batches, upright)
 }
