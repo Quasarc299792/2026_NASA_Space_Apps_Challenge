@@ -132,8 +132,6 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
 .receipt { border-block: 1px solid var(--line); margin-bottom: 18px; }
 .receipt > :last-child { border-bottom: 0; }
 .receipt-line { display: flex; justify-content: space-between; gap: 8px; min-height: 42px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: .89rem; }
-.flight-visual { display: flex; width: min(320px, 100%); align-items: center; gap: 9px; color: var(--accent); }
-.flight-visual i { flex: 1; border-top: 1px dashed currentColor; }
 .team-form { justify-items: start; }
 .team-form form { width: 100%; display: grid; gap: 7px; }
 .team-form label { color: var(--muted); font-size: .83rem; }
@@ -283,3 +281,23 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
   .mission-layout { grid-template-columns: minmax(0, 1.06fr) minmax(0, 1fr); gap: clamp(22px, 3vw, 38px); }
   .mission-layout .lab { position: sticky; top: 16px; }
 }
+
+.lab-scene { position: relative; }
+.lab-focus {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  padding: 3px 6px;
+  background: var(--lab-ink);
+  color: var(--lab-paper);
+  font: .71rem/1.5 var(--mono);
+}
+.batch-record {
+  display: grid;
+  gap: 3px;
+  padding: 10px 13px;
+  border-block: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .85rem;
+}
+.batch-record strong { color: var(--ink); font-family: var(--mono); }
