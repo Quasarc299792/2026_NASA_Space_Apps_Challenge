@@ -1,5 +1,5 @@
-import { missionRules } from '../missions/rules'
-import type { Action, Cost, Design, Evidence, Game, MissionRules, Stop, TestResult, Work } from './types'
+import { missionCatalog, missionRules } from '../missions/rules'
+import type { Action, Cost, Design, Evidence, FlightResult, Game, MissionRules, Stop, TestResult, Work } from './types'
 
 export type * from './types'
 
@@ -14,7 +14,7 @@ export function passes(evidence: Pick<TestResult, 'checks'>) {
 const stageWork = { feasibility: 'assess', design: 'freeze', build: 'build', integration: 'integrate' } as const
 const workOrder: Work[] = Object.values(stageWork)
 
-export function newGame(missionId: string, records: string[] = []): Game {
+export function newGame(missionId: string = missionCatalog[0].id, records: string[] = []): Game {
   const mission = missionRules[missionId]
   return {
     missionId, stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
@@ -133,10 +133,24 @@ function doWork(game: Game): Game {
   }
 }
 
+function finishContact(game: Game, flight: FlightResult): Game {
+  const { contact: _finished, ...next } = game
+  return record({ ...next, stage: 'results', flight }, 'operate')
+}
+
 export function runMission(game: Game, action: Action): Game {
+  const mission = rulesFor(game)
+  if (game.playback) {
+    if (action.type !== 'advanceLab' || action.playback !== game.playback) return game
+    const { kind, step } = game.playback
+    const length = mission.labSteps?.(game, kind) ?? 0
+    if (!action.skip && step + 1 < length) return { ...game, playback: { kind, step: step + 1 } }
+    const { playback: _completed, ...next } = game
+    const evidence = currentEvidence(next)
+    return kind === 'integration' && evidence && !passes(evidence) ? runMission(next, { type: 'review' }) : next
+  }
   if (game.stage === 'results') return game
   if (game.event && action.type !== 'choose') return game
-  const mission = rulesFor(game)
   switch (action.type) {
     case 'choose': {
       const event = pendingEvent(game)
@@ -147,9 +161,23 @@ export function runMission(game: Game, action: Action): Game {
       return advance(record(resolved, 'event', Math.max(0, game.credits - applied.credits), undefined, choice.label))
     }
     case 'configure':
-      return canConfigure(game) && !sameDesign(game.design, action.design) ? { ...game, design: action.design } : game
+      if (!canConfigure(game) || sameDesign(game.design, action.design)
+        || !Object.entries(mission.groups).every(([key, group]) => Object.hasOwn(group.options, action.design[key]))) return game
+      return { ...game, design: action.design }
+    case 'configStep':
+      return mission.configurationSteps?.[game.stage]?.includes(action.step) ? { ...game, configStep: action.step } : game
     case 'work':
       return doWork(game)
+    case 'runLab': {
+      if (!mission.labSteps || (game.stage !== 'build' && game.stage !== 'integration')) return game
+      const next = doWork(game)
+      if (next === game) return game
+      return game.stage === 'build'
+        ? { ...next, benchLead: action.benchLead, playback: { kind: 'assembly', step: 0 } }
+        : { ...next, testFocus: action.testFocus, playback: { kind: 'integration', step: 0 } }
+    }
+    case 'advanceLab':
+      return game
     case 'analyze': {
       if (!canConfigure(game) || (game.analysis && sameDesign(game.analysis.design, game.design))
         || !affordable(game, mission.costs.analyze)) return game
@@ -185,10 +213,35 @@ export function runMission(game: Game, action: Action): Game {
         : advance(spend(game, 'wait'))
     case 'cancel':
       return game.stage === 'flight' ? game : stop(game, 'cancelled')
-    case 'fly': {
+    case 'fly':
+    case 'startContact': {
       const evidence = currentEvidence(game)
-      if (game.stage !== 'flight' || !evidence || !passes(evidence) || !mission.flightChoices.includes(action.choice)) return game
-      return record({ ...game, stage: 'results', flight: mission.fly(evidence, action.choice) }, 'operate')
+      if (game.stage !== 'flight' || game.contact || !evidence || !passes(evidence) || !mission.flightChoices.includes(action.choice)) return game
+      if (action.type === 'fly') return record({ ...game, stage: 'results', flight: mission.fly(evidence, action.choice) }, 'operate')
+      if (!mission.contact) return game
+      const { batches, diagnostics } = mission.contact.plan(evidence, action.choice)
+      if (!batches && !diagnostics) return finishContact(game, mission.contact.finish(evidence, action.choice, 0))
+      return { ...game, contact: { choice: action.choice, next: 0, accepted: 0, diagnosticsPending: diagnostics > 0 } }
+    }
+    case 'checkDiagnostics': {
+      const { contact } = game
+      const evidence = currentEvidence(game)
+      if (game.stage !== 'flight' || !evidence || !contact?.diagnosticsPending || !mission.contact) return game
+      return mission.contact.plan(evidence, contact.choice).batches
+        ? { ...game, contact: { ...contact, diagnosticsPending: false } }
+        : finishContact(game, mission.contact.finish(evidence, contact.choice, 0))
+    }
+    case 'checkBatch': {
+      const { contact } = game
+      const evidence = currentEvidence(game)
+      if (game.stage !== 'flight' || !evidence || !contact || contact.diagnosticsPending
+        || action.batch !== contact.next || !mission.contact) return game
+      const { batches } = mission.contact.plan(evidence, contact.choice)
+      const accepted = contact.accepted + Number(action.deliver)
+      const next = contact.next + 1
+      return next === batches
+        ? finishContact(game, mission.contact.finish(evidence, contact.choice, accepted))
+        : { ...game, contact: { ...contact, next, accepted } }
     }
   }
 }

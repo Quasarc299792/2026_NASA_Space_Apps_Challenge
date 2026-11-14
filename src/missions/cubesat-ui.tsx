@@ -1,19 +1,23 @@
-import { Check, CircleAlert, Flag, Radio, Satellite } from 'lucide-react'
+import { Check, CircleAlert } from 'lucide-react'
 import type { Translate } from '../i18n'
 import type { MissionUi } from '.'
-import { applyRemedy, cubeSat, forecast, testDesign, type CubeSatDesign, type CubeSatEvidence, type Remedy } from './cubesat'
+import { Disclosure } from '../ui/shared'
+import { applyRemedy, cubeSat, planContact, testDesign, type CubeSatDesign, type CubeSatEvidence, type Remedy } from './cubesat'
 
-export function PowerReadout({ estimate, t }: { estimate: ReturnType<typeof forecast>; t: Translate }) {
-  return <div className="power-readout">
-    <strong>{t('powerUse', estimate)}</strong>
-    <div className="power-meter" aria-hidden>
-      <i className={estimate.deficit ? 'overload' : ''} style={{ width: `${Math.min(100, estimate.peak / estimate.available * 100)}%` }} />
-    </div>
-    <span className={estimate.deficit ? 'bad' : 'good'}>{estimate.deficit
-      ? t('powerDeficit', { count: estimate.deficit })
-      : t('powerMargin', { count: estimate.available - estimate.peak })}</span>
-    <small>{t('powerFormula', { bus: cubeSat.busWatts, payload: estimate.payloadWatts, radio: cubeSat.downlinkWatts })}</small>
-  </div>
+type TestResult = ReturnType<typeof testDesign>
+type PowerValues = Pick<TestResult, 'payloadWatts' | 'peak' | 'available'>
+
+export function PowerBreakdown({ design, t, result = testDesign(design) }: { design: CubeSatDesign; t: Translate; result?: PowerValues }) {
+  return <>
+    <dl className="fact-list">
+      <div><dt>{t('bus')}</dt><dd>{cubeSat.busWatts} W</dd></div>
+      <div><dt>{t(cubeSat.payloads[design.payload].label)}</dt><dd>{result.payloadWatts} W</dd></div>
+      <div><dt>{t('downlinkRadio')}</dt><dd>{cubeSat.downlinkWatts} W</dd></div>
+      <div><dt>{t('powerDemand')}</dt><dd>{result.peak} W</dd></div>
+      <div><dt>{t(cubeSat.supplies[design.supply].label)}</dt><dd>{result.available} W</dd></div>
+    </dl>
+    <p>{t(design.schedule === 'overlap' ? 'powerConcurrent' : 'powerSequential')}</p>
+  </>
 }
 
 function Status({ pass, t }: { pass: boolean; t: Translate }) {
@@ -21,70 +25,78 @@ function Status({ pass, t }: { pass: boolean; t: Translate }) {
   return <span className={`status ${pass ? 'good' : 'bad'}`}><Icon size={15} aria-hidden />{t(pass ? 'pass' : 'fail')}</span>
 }
 
-function Report({ evidence, t }: { evidence: CubeSatEvidence; t: Translate }) {
+export function powerFinding(result: TestResult, t: Translate) {
+  return t(result.design.schedule === 'overlap' ? 'powerConflict' : 'powerInsufficient', { peak: result.peak, available: result.available })
+}
+
+export function testedBatches(evidence: TestResult) {
+  return evidence.testedBatches ?? (evidence.powerPass ? evidence.batches : 0)
+}
+
+export function Findings({ evidence, t }: { evidence: TestResult; t: Translate }) {
+  return <ul className="findings">
+    {!evidence.powerPass && <li>{powerFinding(evidence, t)}</li>}
+    {!evidence.ditlPass && <li>{t('earlyTransmission', evidence.ditl)}</li>}
+    {evidence.powerPass && !evidence.dataPass && <li>{t('dataShortfall', { count: testedBatches(evidence), minimum: cubeSat.minimumBatches })}</li>}
+  </ul>
+}
+
+function Report({ evidence, t }: { evidence: TestResult; t: Translate }) {
   const { ditl } = evidence
   return <>
-    <div className="check">
-      <div className="row"><h3>{t('powerCheck')}</h3><Status pass={evidence.powerPass} t={t} /></div>
-      <PowerReadout estimate={evidence} t={t} />
+    <Disclosure label={t('powerCheck')} value={<Status pass={evidence.powerPass} t={t} />}>
+      <PowerBreakdown design={evidence.design} result={evidence} t={t} />
+    </Disclosure>
+    <div className="check row">
+      <span>{t('dataCheck')}<small>{t('dataThreshold', { count: testedBatches(evidence), minimum: cubeSat.minimumBatches })}</small></span>
+      <Status pass={evidence.dataPass} t={t} />
     </div>
-    <div className="check">
-      <div className="row"><h3>{t('dataCheck')}</h3><Status pass={evidence.dataPass} t={t} /></div>
-      <p>{t('dataThreshold', { count: evidence.testedBatches ?? (evidence.powerPass ? evidence.batches : 0), minimum: cubeSat.minimumBatches })}</p>
-    </div>
-    <div className="check">
-      <div className="row"><h3>{t('ditl')}</h3><Status pass={evidence.ditlPass} t={t} /></div>
-      <dl className="timeline">
+    <Disclosure label={t('ditl')} value={<Status pass={evidence.ditlPass} t={t} />}>
+      <dl className="fact-list">
         <div><dt>{t('separation')}</dt><dd>{t('timestamp', { count: ditl.separation })}</dd></div>
         <div><dt>{t('deployment')}</dt><dd>{t('timestamp', { count: ditl.deploy })}</dd></div>
         <div><dt>{t('firstTx')}</dt><dd>{t('timestamp', { count: ditl.firstTx })}</dd></div>
       </dl>
       <p>{t('ditlRule', ditl)}</p>
       <a href={cubeSat.ditl.url} target="_blank" rel="noreferrer">{cubeSat.ditl.source} ↗</a>
-    </div>
+    </Disclosure>
   </>
 }
 
 export function RemedyPreview({ design, remedy, t }: { design: CubeSatDesign; remedy: Remedy; t: Translate }) {
-  const evidence = testDesign(applyRemedy(design, remedy))
-  return <small>{t('powerUse', { peak: evidence.peak, available: evidence.available })} · {t('dataThreshold', { count: evidence.batches, minimum: cubeSat.minimumBatches })}
-    {remedy === 'compliant' && <> · {t('timestamp', { count: evidence.ditl.firstTx })}</>}
-  </small>
+  const result = testDesign(applyRemedy(design, remedy))
+  return <small>{remedy === 'compliant'
+    ? `${t('firstTx')} ${t('timestamp', { count: result.ditl.firstTx })}`
+    : `${t('powerUse', { peak: result.peak, available: result.available })} · ${t('dataBatches', { count: result.batches })}`}</small>
 }
 
-function Requirements({ t, compact }: { t: Translate; compact?: boolean }) {
-  const minimum = t('briefMinimum', { count: cubeSat.minimumBatches, orbits: cubeSat.missionOrbits })
-  const icd = t('briefIcd', { count: cubeSat.ditl.minQuietMinutes })
-  if (compact) return <><p>{minimum}</p><p>{icd}</p></>
+function Requirements({ t }: { t: Translate }) {
   return <ul className="requirements">
-    <li><Flag size={18} aria-hidden />{minimum}</li>
-    <li><Satellite size={18} aria-hidden />{t('briefExtra', { count: cubeSat.stretchBatches })}</li>
-    <li><Radio size={18} aria-hidden />{icd}</li>
+    <li>{t('briefMinimum', { count: cubeSat.minimumBatches, orbits: cubeSat.missionOrbits })}</li>
+    <li>{t('briefExtra', { count: cubeSat.stretchBatches })}</li>
+    <li>{t('briefIcd', { count: cubeSat.ditl.minQuietMinutes })}</li>
   </ul>
 }
 
 export const cubeSatUi: MissionUi = {
   Requirements,
-  Estimate: ({ design, t }) => {
-    const estimate = forecast(design as CubeSatDesign)
-    return <>
-      <PowerReadout estimate={estimate} t={t} />
-      <div className="estimate-line"><span>{t('estimatedDelivery')}</span><strong>{estimate.batches}</strong></div>
-    </>
-  },
-  Forecast: ({ forecast: estimate, t }) => <PowerReadout estimate={estimate as ReturnType<typeof forecast>} t={t} />,
-  Report: ({ evidence, t }) => <Report evidence={evidence as CubeSatEvidence} t={t} />,
-  ReportSummary: ({ evidence, t }) => <>{t('powerUse', { peak: evidence.peak, available: evidence.available })} · {t('ditlRule', evidence.ditl)}</>,
+  Estimate: ({ design, t }) => <PowerBreakdown design={design as CubeSatDesign} t={t} />,
+  Forecast: ({ design, forecast, t }) => <PowerBreakdown design={design as CubeSatDesign} result={forecast as PowerValues} t={t} />,
+  Report: ({ evidence, t }) => <Report evidence={evidence as TestResult} t={t} />,
   RemedyPreview: ({ design, remedy, t }) => <RemedyPreview design={design as CubeSatDesign} remedy={remedy as Remedy} t={t} />,
   Delivery: ({ flight, t }) => <>
-    <p>{t('flightBatches', { count: flight.batches })}</p>
+    <p>{t('firstTx')} · {t('timestamp', { count: flight.firstTx })}</p>
     {Boolean(flight.diagnostics) && <p>{t('flightDiagnosticsSent')}</p>}
-    <small>{t('firstTx')} · {t('timestamp', { count: flight.firstTx })}</small>
+    {Boolean(flight.archived) && <p>{t('groundArchivedResult', { count: flight.archived })}</p>}
   </>,
-  flightOptions: (evidence, t) => [
-    { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: cubeSat.minimumBatches }) },
-    { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: evidence.batches }) },
-    { id: 'diagnostics', name: 'flightDiagnostics', detail: t('flightDiagnosticsDetail', { count: cubeSat.diagnosticBatches }) },
-  ],
+  flightOptions: (evidence, t) => {
+    const extra = planContact(evidence as CubeSatEvidence, 'extra')
+    const diagnostics = planContact(evidence as CubeSatEvidence, 'diagnostics')
+    return [
+      { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: cubeSat.minimumBatches }) },
+      { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: extra.batches }) },
+      { id: 'diagnostics', name: 'flightDiagnostics', detail: t('flightContactDiagnostics', { slots: diagnostics.diagnostics, count: diagnostics.batches }) },
+    ]
+  },
   flightSummary: (flight, t) => t('flightBatches', { count: flight.batches }),
 }

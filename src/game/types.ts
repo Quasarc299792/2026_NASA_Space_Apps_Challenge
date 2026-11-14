@@ -7,6 +7,11 @@ export type Work = 'assess' | 'freeze' | 'build' | 'integrate'
 export type Stage = 'feasibility' | 'design' | 'build' | 'integration' | 'review' | 'flight' | 'results'
 export type Gate = 'MDR' | 'PDR' | 'CDR' | 'FRR'
 export type Stop = 'deadline' | 'funds' | 'cancelled'
+export type LabPlayback = { kind: 'assembly' | 'integration'; step: number }
+export type BenchLead = 'science' | 'power'
+export type TestFocus = 'imaging' | 'downlink'
+export type ConfigStep = 'payload' | 'supply' | 'schedule' | 'radio'
+type Contact = { choice: string; next: number; accepted: number; diagnosticsPending: boolean }
 
 export type DesignOption = { label: Message; description: Message; cost?: number; params?: Record<string, number | string> }
 export type OptionGroup = { legend: Message; options: Record<string, DesignOption> }
@@ -39,6 +44,11 @@ export type Game = {
   events: string[]
   records: string[]
   log: Entry[]
+  playback?: LabPlayback
+  benchLead?: BenchLead
+  testFocus?: TestFocus
+  contact?: Contact
+  configStep?: ConfigStep
 }
 
 export type Action =
@@ -47,6 +57,12 @@ export type Action =
   | { type: 'repair'; remedy: string }
   | { type: 'fly'; choice: string }
   | { type: 'choose'; choice: string }
+  | { type: 'configStep'; step: ConfigStep }
+  | { type: 'runLab'; benchLead?: BenchLead; testFocus?: TestFocus }
+  | { type: 'advanceLab'; playback: LabPlayback; skip?: boolean }
+  | { type: 'startContact'; choice: string }
+  | { type: 'checkDiagnostics' }
+  | { type: 'checkBatch'; batch: number; deliver: boolean }
 
 export type EventChoice = { id: string; label: Message; detail: Message; apply(game: Game): Game }
 
@@ -75,6 +91,12 @@ export type MissionRules = {
   reputation: { minimum: number; stretch: number }
   flightChoices: readonly string[]
   events?: readonly MissionEvent[]
+  configurationSteps?: Partial<Record<Stage, readonly ConfigStep[]>>
+  labSteps?(game: Game, kind: LabPlayback['kind']): number
+  contact?: {
+    plan(evidence: Evidence, choice: string): { batches: number; diagnostics: number }
+    finish(evidence: Evidence, choice: string, accepted: number): FlightResult
+  }
   forecast(design: Design): Forecast
   forecastClear(forecast: Forecast): boolean
   test(design: Design): TestResult

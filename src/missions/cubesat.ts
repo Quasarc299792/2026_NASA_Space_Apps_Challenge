@@ -1,4 +1,4 @@
-import type { Design, MissionRules } from '../game/types'
+import type { BenchLead, Design, Game, MissionRules, TestFocus } from '../game/types'
 
 export const cubeSat = {
   id: 'cubesat',
@@ -6,6 +6,7 @@ export const cubeSat = {
   brief: 'briefStory',
   deadline: 6,
   budget: 100,
+  dollarsPerCredit: 10_000,
   playMinutes: '3–5',
   initialDesign: { payload: 'basic', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
   reviewDesign: { payload: 'advanced', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
@@ -77,14 +78,31 @@ export type MultiplayerRemedy = typeof multiplayerRemedies[number]
 export const flightChoices = ['priority', 'extra', 'diagnostics'] as const
 export type FlightChoice = typeof flightChoices[number]
 
+export function powerTimeline(design: CubeSatDesign) {
+  const bus = cubeSat.busWatts
+  const imaging = bus + cubeSat.payloads[design.payload].watts
+  const downlink = bus + cubeSat.downlinkWatts
+  return design.schedule === 'overlap'
+    ? [{ id: 'imaging', watts: imaging }, { id: 'overlap', watts: imaging + cubeSat.downlinkWatts }] as const
+    : [{ id: 'imaging', watts: imaging }, { id: 'handoff', watts: bus }, { id: 'downlink', watts: downlink }] as const
+}
+
+const assemblyOrder = ['science', 'power', 'comms'] as const
+
+export function benchSequence(lead: BenchLead = 'science') {
+  return lead === 'power' ? ['power', 'science', 'comms'] as const : assemblyOrder
+}
+
+export function scopeSegment(timeline: ReturnType<typeof powerTimeline>, focus: TestFocus = 'downlink') {
+  return focus === 'imaging' ? timeline[0] : timeline[timeline.length - 1]
+}
+
 export function forecast(design: CubeSatDesign) {
   const payload = cubeSat.payloads[design.payload]
   const supply = cubeSat.supplies[design.supply]
   const schedule = cubeSat.schedules[design.schedule]
   const radio = cubeSat.radios[design.radio]
-  const combined = cubeSat.busWatts + payload.watts + cubeSat.downlinkWatts
-  const separate = cubeSat.busWatts + Math.max(payload.watts, cubeSat.downlinkWatts)
-  const peak = design.schedule === 'overlap' ? combined : separate
+  const peak = Math.max(...powerTimeline(design).map(segment => segment.watts))
   const capacity = Math.min(cubeSat.groundCapacity, radio.groundCapacity)
   return {
     payloadWatts: payload.watts, peak, available: supply.watts, deficit: Math.max(0, peak - supply.watts),
@@ -141,13 +159,20 @@ export function resolveTeamReview(remedy: MultiplayerRemedy) {
   }
 }
 
-function fly(evidence: ReturnType<typeof testDesign>, choice: FlightChoice) {
-  const capacity = evidence.contactCapacity
+export type CubeSatGame = Game & { design: CubeSatDesign }
+
+export function planContact(evidence: Pick<CubeSatEvidence, 'design' | 'contactCapacity' | 'batches'>, choice: string) {
+  const capacity = evidence.contactCapacity ?? forecast(evidence.design).contactCapacity
   const diagnostics = choice === 'diagnostics' ? Math.min(capacity, cubeSat.diagnosticBatches) : 0
   const requested = choice === 'priority' ? cubeSat.minimumBatches : evidence.batches
-  const batches = Math.min(requested, evidence.batches, capacity - diagnostics)
+  return { batches: Math.min(requested, evidence.batches, capacity - diagnostics), diagnostics }
+}
+
+function finishContact(evidence: CubeSatEvidence, choice: string, accepted?: number) {
+  const { batches: received, diagnostics } = planContact(evidence, choice)
+  const batches = accepted ?? received
   return {
-    choice, batches, diagnostics, firstTx: evidence.ditl.firstTx,
+    choice, batches, diagnostics, archived: received - batches, firstTx: evidence.ditl.firstTx,
     delivered: batches >= cubeSat.minimumBatches, stretch: batches >= cubeSat.stretchBatches,
   }
 }
@@ -176,10 +201,16 @@ export const cubeSatRules: MissionRules = {
   outcomes: { stopped: 'outcomeStopped', extra: 'outcomeExtra', success: 'outcomeSuccess', partial: 'outcomePartial' },
   reputation: { minimum: 1, stretch: 1 },
   flightChoices,
+  configurationSteps: { feasibility: ['payload', 'supply'], design: ['schedule', 'radio'] },
+  labSteps: (game, kind) => kind === 'assembly' ? benchSequence(game.benchLead).length : powerTimeline(game.design as CubeSatDesign).length,
+  contact: {
+    plan: (evidence, choice) => planContact(evidence as CubeSatEvidence, choice),
+    finish: (evidence, choice, accepted) => finishContact(evidence as CubeSatEvidence, choice, accepted),
+  },
   forecast: design => forecast(design as CubeSatDesign),
   forecastClear: result => !result.deficit,
   test: design => testDesign(design as CubeSatDesign),
   applyRemedy: (design, remedy) => applyRemedy(design as CubeSatDesign, remedy as Remedy),
   repairOptions: (design: Design) => repairOptions(design as CubeSatDesign),
-  fly: (evidence, choice) => fly(evidence as CubeSatEvidence, choice as FlightChoice),
+  fly: (evidence, choice) => finishContact(evidence as CubeSatEvidence, choice),
 }
