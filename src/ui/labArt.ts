@@ -1,4 +1,4 @@
-import type { Design } from '../game/mission'
+import type { CubeSatDesign } from '../missions/cubesat'
 import type { Department } from '../missions/cubesat'
 
 const ink = '#182f45'
@@ -18,7 +18,7 @@ const teams = [
 ] as const
 
 export type LabArt = {
-  design: Design
+  design: CubeSatDesign
   active: readonly Department[]
   comparing?: Department
   assemblyStep: number

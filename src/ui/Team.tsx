@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Check, Radio } from 'lucide-react'
-import {
-  passes, resolveTeamReview, testDesign, reviewDesign, type MultiplayerRemedy,
-} from '../game/mission'
+import { passes } from '../game/mission'
 import { readLocal, writeLocal } from '../game/storage'
 import type { Message, Translate } from '../i18n'
-import { cubeSat, departments, proposals, type Department } from '../missions/cubesat'
+import { cubeSatMission } from '../missions'
+import { cubeSat, departments, proposals, resolveTeamReview, reviewDesign, testDesign, type Department, type MultiplayerRemedy } from '../missions/cubesat'
+import { PowerBreakdown, powerFinding, RemedyPreview } from '../missions/cubesat-ui'
 import { claimRole, confirmRoom, createRoom, openRoom, roomIdentity, RoomError, submitProposal, watchRoom } from '../multiplayer/client'
 import { activeRoomKey } from '../multiplayer/config'
 import { hasPlayerProposal, proposalFor, roleFor, roles, type Room } from '../multiplayer/model'
-import { ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Heading, money, PowerBreakdown, powerFinding, RemedyPreview } from './shared'
+import { ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Heading, money } from './shared'
 import { ReportCard } from './ReportCard'
 
 const current = testDesign(reviewDesign)
@@ -114,7 +114,7 @@ function RoomResult({ room, t }: { room: Room; t: Translate }) {
       </div>
     </section>
     <Disclosure label={t('report')}>
-      <EvidenceReport t={t} evidence={{ ...result.evidence, week: baseWeek + result.weeks, revision: 1 }} />
+      <EvidenceReport mission={cubeSatMission} t={t} evidence={{ ...result.evidence, week: baseWeek + result.weeks, revision: 1 }} />
     </Disclosure>
   </>
 }
@@ -243,7 +243,7 @@ export default function Team({ t, back }: { t: Translate; back: () => void }) {
           <TeamProposals room={room} t={t} disabled={disabled} />
         </Disclosure>}
         <Disclosure label={t('teamCurrent')}>
-          <DesignSummary design={reviewDesign} t={t} />
+          <DesignSummary mission={cubeSatMission} design={reviewDesign} t={t} />
           <PowerBreakdown design={reviewDesign} t={t} />
         </Disclosure>
         <Disclosure label={t('teamSize')} value={t('round', { count: room.roundId.split('-').at(-1) ?? '' })}>

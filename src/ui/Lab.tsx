@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { FastForward } from 'lucide-react'
-import { benchSequence, currentEvidence, forecast, planContact, powerTimeline, scopeSegment, type Action, type Game } from '../game/mission'
+import { currentEvidence, type Action } from '../game/mission'
 import type { Message, Translate } from '../i18n'
-import { cubeSat, departments, type Department } from '../missions/cubesat'
+import { benchSequence, cubeSat, departments, forecast, planContact, powerTimeline, scopeSegment, type CubeSatEvidence, type CubeSatGame, type Department } from '../missions/cubesat'
 import { drawLab, type LabArt } from './labArt'
 
 const reducedMotion = '(prefers-reduced-motion: reduce)'
@@ -16,13 +16,13 @@ const segments = {
 
 const assemblyLabels = { science: 'labCalibrate', power: 'labConnect', comms: 'labBoot' } as const
 
-export function Lab({ game, send, t }: { game: Game; send: (action: Action) => void; t: Translate }) {
+export function Lab({ game, send, t }: { game: CubeSatGame; send: (action: Action) => void; t: Translate }) {
   const [department, inspect] = useState<Department | null>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const { playback, design, stage, contact } = game
   const orbit = stage === 'flight'
   const assembly = playback?.kind === 'assembly'
-  const evidence = currentEvidence(game)
+  const evidence = currentEvidence(game) as CubeSatEvidence | null
   const timeline = powerTimeline(design)
   const available = cubeSat.supplies[design.supply].watts
   const receiving = contact && evidence ? planContact(evidence, contact.choice) : null

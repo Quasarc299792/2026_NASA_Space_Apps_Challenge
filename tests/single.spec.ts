@@ -17,7 +17,7 @@ const button = (page: Page, name: string | RegExp) => page.getByRole('button', {
 const readout = (page: Page) => page.locator('.lab-readout')
 const summary = (page: Page, text: string) => page.locator('summary').filter({ hasText: text })
 const heading = (page: Page, name: string) => page.getByRole('heading', { name, exact: true })
-const saved = (page: Page): Promise<Game> => page.evaluate(() => JSON.parse(localStorage.getItem('space-mission.single.v1')!))
+const saved = (page: Page): Promise<Game> => page.evaluate(() => JSON.parse(localStorage.getItem('space-mission.single.v2')!))
 
 async function start(page: Page, language: keyof typeof labels = 'en') {
   const copy = labels[language]
@@ -83,6 +83,7 @@ test('baseline keeps evidence collapsed, stages handoffs and delivers the requir
   await expect(page.getByText('2 usable batches received')).toBeVisible()
   await button(page, 'Return home').click()
   await expect(heading(page, 'Your first CubeSat')).toBeVisible()
+  await expect(page.getByText('Team reputation · 1')).toBeVisible()
   await button(page, 'View last mission results').click()
   await expect(page.getByText('2 usable batches received')).toBeVisible()
 })
@@ -225,6 +226,7 @@ test('a pre-lab autosave resumes at flight review', async ({ page }) => {
   })
   await page.reload()
   await button(page, 'Continue mission').click()
+  expect(await saved(page)).toMatchObject({ deadline: 6, events: [], records: [], evidence: { checks: [true, true, true] } })
   await button(page, labels.en.review).click()
   await button(page, labels.en.pass).click()
   await finishDelivery(page, 1)
