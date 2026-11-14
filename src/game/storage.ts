@@ -28,6 +28,9 @@ export function readGame(): Game | null {
     if (!mission || !stages.includes(game.stage) || !Array.isArray(game.log) || !Array.isArray(game.events) || !Array.isArray(game.records)
       || !Number.isInteger(game.deadline) || !Number.isInteger(game.week) || game.week < 0
       || !Number.isInteger(game.credits) || game.credits < 0
+      // Saves from before seeded risk have no seed. They are dropped so the lobby offers a new mission.
+      || !Number.isInteger(game.seed) || game.seed < 0 || typeof game.risks !== 'object' || game.risks === null
+      || !Array.isArray(game.accepted) || !Array.isArray(game.outcomes)
       || (game.event !== null && !mission.events?.some(event => event.id === game.event))
       || !Object.entries(mission.groups).every(([group, { options }]) => Object.hasOwn(options, game.design?.[group]))) return null
     return game
