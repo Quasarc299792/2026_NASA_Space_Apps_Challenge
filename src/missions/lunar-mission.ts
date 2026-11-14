@@ -422,15 +422,14 @@ export function lunarAcceptance(design: LunarDesign, states: LunarStates) {
 }
 
 // External events. Verification never changes these draws.
-export function lunarDevCards(seed: number) {
+// The pull-in takes the first or second draw. The other draws take cards from `order`, skipping any whose condition
+// does not hold at that moment, so every draw week brings an event.
+export function lunarDevDeck(seed: number) {
   const pullInSlot = drawFromPool(seed, 'lunar:pullIn', [0, 1])!
   const pool: string[] = lunarMission.devCards.map(item => item.id).filter(id => id !== 'PullIn')
-  return lunarMission.drawWeeks.map((_, slot) => {
-    if (slot === pullInSlot) return 'PullIn'
-    const drawn = drawFromPool(seed, `lunar:dev:${slot}`, pool)!
-    pool.splice(pool.indexOf(drawn), 1)
-    return drawn
-  }) as (typeof lunarMission.devCards[number]['id'])[]
+  const order: string[] = []
+  while (pool.length) order.push(...pool.splice(pool.indexOf(drawFromPool(seed, `lunar:dev:${order.length}`, pool)!), 1))
+  return { pullInSlot, order: order as Exclude<typeof lunarMission.devCards[number]['id'], 'PullIn'>[] }
 }
 export function lunarFlightCards(seed: number) {
   return {
