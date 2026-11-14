@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Radio, Satellite } from 'lucide-react'
 import { cubeSat as mission } from '../missions/cubesat'
 import {
   affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, currentWork, forecast, passes, repairOptions,
@@ -11,6 +10,7 @@ import {
   money, passCount, PowerBreakdown, powerFinding, RemedyPreview, testedBatches,
 } from './shared'
 import { ReportCard } from './ReportCard'
+import { Lab } from './Lab'
 
 const stages: Stage[] = ['feasibility', 'design', 'build', 'integration', 'review', 'flight']
 type Props = { game: Game; t: Translate; send: (action: Action) => void; back: () => void }
@@ -132,7 +132,6 @@ function Flight({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
   if (!evidence) return null
   return <>
     <ReportCard speaker="ground" t={t}><p>{t('reportFlight')}</p></ReportCard>
-    <div className="flight-visual" aria-hidden><Satellite size={34} strokeWidth={1.2} /><i /><Radio size={26} strokeWidth={1.2} /></div>
     <Options legend="ground" value={choice} choose={setChoice} t={t} options={[
       { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: mission.minimumBatches }) },
       { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: evidence.batches }) },
@@ -242,23 +241,26 @@ function Reference({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
 
 export function Single(props: Props) {
   const { game, t, send, back } = props
-  if (game.stage === 'results') return <Results {...props} />
+  if (game.stage === 'results' && !game.playback) return <Results {...props} />
   const work = currentWork(game)
   const cost = work && workCost(game, work)
   const checks = currentEvidence(game)
   const editable = canConfigure(game)
-  const stage = game.stage
+  const stage = game.playback?.kind === 'assembly' ? 'build' : game.playback?.kind === 'integration' ? 'integration' : game.stage
   const latestAnalysis = editable && game.analysis && ['analysisClear', 'analysisConflict'].includes(game.log.at(-1)?.id ?? '')
     && sameDesign(game.analysis.design, game.design) ? game.analysis : null
 
-  return <article className="manual">
+  return <article className="single-mission">
     <Back t={t} onClick={back} />
     <Heading eyebrow={t('cubesat')} title={t(game.returned ? 'returned' : stage)} />
     <dl className="resource-line">
       <div><dt>{t('flightWindow')}</dt><dd>{t('weeks', { count: availableWeeks(game) })}</dd></div>
       <div><dt>{t('budgetLabel')}</dt><dd>{money(game.credits)}</dd></div>
     </dl>
-    <section className="next-decision decision-arrival" key={`${stage}:${game.returned}`}>
+    <div className="mission-layout">
+      <Lab game={game} t={t} send={send} />
+      <div>
+    {!game.playback && <section className="next-decision decision-arrival" key={`${stage}:${game.returned}`}>
       {stage === 'build' && <ReportCard speaker="assembly" t={t}><p>{t('reportBuild')}</p></ReportCard>}
       {stage === 'integration' && <ReportCard speaker="test" t={t}>
         <p>{t(game.evidence ? 'reviewRetest' : 'reportIntegration')}</p>
@@ -266,25 +268,25 @@ export function Single(props: Props) {
       {stage === 'review' && checks && (passes(checks)
         ? <ReportCard speaker="review" t={t}><p>{t('reviewReady')}</p></ReportCard>
         : <div>
-          <ReportCard speaker="review" t={t} attention>
+          <ReportCard speaker={!checks.powerPass ? 'power' : !checks.ditlPass ? 'comms' : 'science'} t={t} attention>
             <Findings evidence={checks} t={t} />
-            {game.returned && <p>{t('reportReviewBlocked')}</p>}
+            {game.returned && <p>{t(!checks.powerPass ? 'labPowerFix' : !checks.ditlPass ? 'labTimingFix' : 'reportReviewBlocked')}</p>}
           </ReportCard>
-          {!checks.powerPass && <Disclosure label={t('powerBreakdown')}>
-            <PowerBreakdown design={checks.design} result={checks} t={t} />
-          </Disclosure>}
         </div>)}
       {editable && <Config game={game} t={t} send={send} />}
       {latestAnalysis && <p className={latestAnalysis.forecast.deficit ? 'warning' : 'verified'} role="status">
         {t(latestAnalysis.forecast.deficit ? 'analysisTradeoff' : 'analysisClear')}
       </p>}
       {game.returned && <Repair game={game} t={t} send={send} />}
-      {work && cost && <ActionButton disabled={!affordable(game, cost)} onClick={() => send({ type: 'work' })}>
+      {work && cost && <ActionButton disabled={!affordable(game, cost)}
+        onClick={() => send({ type: stage === 'build' || stage === 'integration' ? 'runLab' : 'work' })}>
         {t(work === 'integrate' && game.evidence ? 'retest' : mission.costs[work].label)} <CostLabel t={t} {...cost} />
       </ActionButton>}
       {stage === 'review' && !game.returned && <ActionButton onClick={() => send({ type: 'review' })}>{t('submitReview')}</ActionButton>}
       {stage === 'flight' && <Flight game={game} t={t} send={send} />}
-    </section>
-    <Reference key={stage} game={game} t={t} send={send} />
+    </section>}
+    {!game.playback && <Reference key={stage} game={game} t={t} send={send} />}
+      </div>
+    </div>
   </article>
 }

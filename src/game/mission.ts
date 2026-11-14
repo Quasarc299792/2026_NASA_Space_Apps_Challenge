@@ -17,14 +17,21 @@ export type Cost = { weeks: number; credits: number }
 export type Stage = 'feasibility' | 'design' | 'build' | 'integration' | 'review' | 'flight' | 'results'
 export type Gate = 'MDR' | 'PDR' | 'CDR' | 'FRR'
 
+export function powerTimeline(design: Design) {
+  const bus = mission.busWatts
+  const imaging = bus + mission.payloads[design.payload].watts
+  const downlink = bus + mission.downlinkWatts
+  return design.schedule === 'overlap'
+    ? [{ id: 'imaging', watts: imaging }, { id: 'overlap', watts: imaging + mission.downlinkWatts }] as const
+    : [{ id: 'imaging', watts: imaging }, { id: 'handoff', watts: bus }, { id: 'downlink', watts: downlink }] as const
+}
+
 export function forecast(design: Design) {
   const payload = mission.payloads[design.payload]
   const supply = mission.supplies[design.supply]
   const schedule = mission.schedules[design.schedule]
   const radio = mission.radios[design.radio]
-  const combined = mission.busWatts + payload.watts + mission.downlinkWatts
-  const separate = mission.busWatts + Math.max(payload.watts, mission.downlinkWatts)
-  const peak = design.schedule === 'overlap' ? combined : separate
+  const peak = Math.max(...powerTimeline(design).map(segment => segment.watts))
   const capacity = Math.min(mission.groundCapacity, radio.groundCapacity)
   return {
     payloadWatts: payload.watts, peak, available: supply.watts, deficit: Math.max(0, peak - supply.watts),
@@ -85,6 +92,8 @@ type Analysis = { design: Design; forecast: ReturnType<typeof forecast> }
 export type FlightChoice = 'priority' | 'extra' | 'diagnostics'
 export type Flight = { choice: FlightChoice; batches: number; diagnostics?: number; stretch: boolean; firstTx: number }
 type Stop = 'deadline' | 'funds' | 'cancelled'
+export type LabPlayback = { kind: 'assembly' | 'integration'; step: number }
+export const assemblyOrder = ['science', 'power', 'comms'] as const
 
 export type Game = {
   missionId: typeof mission.id
@@ -100,6 +109,7 @@ export type Game = {
   stop: Stop | null
   returned: boolean
   log: Entry[]
+  playback?: LabPlayback
 }
 
 export type Action =
@@ -107,6 +117,8 @@ export type Action =
   | { type: 'work' | 'analyze' | 'review' | 'wait' | 'cancel' }
   | { type: 'repair'; remedy: Remedy }
   | { type: 'fly'; choice: FlightChoice }
+  | { type: 'runLab' }
+  | { type: 'advanceLab'; playback: LabPlayback; skip?: boolean }
 
 export function newGame(): Game {
   return {
@@ -209,12 +221,28 @@ function doWork(game: Game): Game {
 }
 
 export function runMission(game: Game, action: Action): Game {
+  if (game.playback) {
+    if (action.type !== 'advanceLab' || action.playback !== game.playback) return game
+    const { kind, step } = game.playback
+    const length = kind === 'assembly' ? assemblyOrder.length : powerTimeline(game.design).length
+    if (!action.skip && step + 1 < length) return { ...game, playback: { kind, step: step + 1 } }
+    const { playback: _completed, ...next } = game
+    const evidence = currentEvidence(next)
+    return kind === 'integration' && evidence && !passes(evidence) ? runMission(next, { type: 'review' }) : next
+  }
   if (game.stage === 'results') return game
   switch (action.type) {
     case 'configure':
       return canConfigure(game) && !sameDesign(game.design, action.design) ? { ...game, design: action.design } : game
     case 'work':
       return doWork(game)
+    case 'runLab': {
+      if (game.stage !== 'build' && game.stage !== 'integration') return game
+      const next = doWork(game)
+      return next === game ? game : { ...next, playback: { kind: game.stage === 'build' ? 'assembly' : 'integration', step: 0 } }
+    }
+    case 'advanceLab':
+      return game
     case 'analyze': {
       if (!canConfigure(game) || (game.analysis && sameDesign(game.analysis.design, game.design))
         || !affordable(game, mission.costs.analyze)) return game
