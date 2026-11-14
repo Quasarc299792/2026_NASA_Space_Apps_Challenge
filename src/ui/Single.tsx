@@ -13,7 +13,7 @@ import {
 import { ReportCard } from './ReportCard'
 
 const stages: Stage[] = ['feasibility', 'design', 'build', 'integration', 'review', 'flight']
-type Props = { game: Game; t: Translate; send: (action: Action) => void; back: () => void; restart: () => void }
+type Props = { game: Game; t: Translate; send: (action: Action) => void; back: () => void }
 
 function Requirements({ t }: { t: Translate }) {
   return <ul className="requirements">
@@ -142,7 +142,7 @@ function Flight({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
   </>
 }
 
-function Results({ game, t, back, restart }: Props) {
+function Results({ game, t, back }: Props) {
   const { flight, stop, evidence } = game
   const current = currentEvidence(game)
   const outcome = !flight ? 'outcomeStopped' : flight.stretch ? 'outcomeExtra'
@@ -150,7 +150,6 @@ function Results({ game, t, back, restart }: Props) {
   const stopCopy = { deadline: 'stopDeadline', funds: 'stopFunds', cancelled: 'stopCancelled' } as const
   const batches = (count: number) => t('dataBatches', { count })
   return <article className="manual">
-    <Back t={t} onClick={back} />
     <Heading eyebrow={t('results')} title={t(outcome)}>{flight ? t('flightBatches', { count: flight.batches }) : stop && t(stopCopy[stop])}</Heading>
     <dl className="resource-line">
       <div><dt>{t('usedWeeks')}</dt><dd>{t('weeks', { count: game.week })}</dd></div>
@@ -166,7 +165,7 @@ function Results({ game, t, back, restart }: Props) {
         {Boolean(flight.diagnostics) && <p>{t('flightDiagnosticsSent')}</p>}
       </Disclosure> : <div className="receipt-line"><span>{t('delivery')}</span><small>{t('noFlight')}</small></div>}
     </section>
-    <ActionButton onClick={restart}>{t('replay')}</ActionButton>
+    <ActionButton onClick={back}>{t('home')}</ActionButton>
     <div className="references">
       <p>{t('gates', { gate: game.gate })}</p>
       {game.log.length > 0 && <Disclosure label={t('log')}><DecisionLog game={game} t={t} /></Disclosure>}

@@ -23,7 +23,9 @@ function session(game: Game | null, action: SessionAction) {
   return action.type === 'new' ? newGame() : game && runMission(game, action)
 }
 
-function Lobby({ t, saved, open, resume, team }: { t: Translate; saved: boolean; open: () => void; resume: () => void; team: () => void }) {
+function Lobby({ t, game, open, resume, team }: { t: Translate; game: Game | null; open: () => void; resume: () => void; team: () => void }) {
+  const finished = game?.stage === 'results'
+  const inProgress = game !== null && !finished
   return <>
     <section className="lobby">
       <div className="lobby-copy">
@@ -32,8 +34,9 @@ function Lobby({ t, saved, open, resume, team }: { t: Translate; saved: boolean;
         <p className="lobby-intro">{t('heroDetail')}</p>
         <p className="lobby-duration">{t('duration', { minutes: cubeSat.playMinutes })} · {t('single')}</p>
         <div className="action-row">
-          <ActionButton onClick={saved ? resume : open}>{t(saved ? 'continue' : 'briefAction')}</ActionButton>
-          {saved && <button className="text-button" onClick={open}>{t('newMission')}</button>}
+          <ActionButton onClick={inProgress ? resume : open}>{t(inProgress ? 'continue' : finished ? 'newMission' : 'briefAction')}</ActionButton>
+          {inProgress && <button className="text-button" onClick={open}>{t('newMission')}</button>}
+          {finished && <button className="text-button" onClick={resume}>{t('previousResults')}</button>}
         </div>
       </div>
       <figure className="lobby-photo">
@@ -99,9 +102,9 @@ function App() {
     </header>
     <main className="shell">
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
-      {screen === 'lobby' && <Lobby t={t} saved={Boolean(game)} open={() => setScreen('brief')} resume={() => setScreen('single')} team={() => setScreen('team')} />}
+      {screen === 'lobby' && <Lobby t={t} game={game} open={() => setScreen('brief')} resume={() => setScreen('single')} team={() => setScreen('team')} />}
       {screen === 'brief' && <Brief t={t} saved={Boolean(game)} back={back} begin={begin} />}
-      {screen === 'single' && game && <Single game={game} send={dispatch} back={back} restart={begin} t={t} />}
+      {screen === 'single' && game && <Single game={game} send={dispatch} back={back} t={t} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
     </main>
   </>

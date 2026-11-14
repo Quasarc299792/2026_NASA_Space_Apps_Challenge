@@ -39,6 +39,11 @@ test('baseline mission keeps evidence collapsed and delivers the required data',
   for (const label of ['Design estimate', 'Integration evidence', 'Actual delivery']) {
     await expect(page.locator('summary').filter({ hasText: label })).toBeVisible()
   }
+  await page.getByRole('button', { name: 'Return home' }).click()
+  await expect(page.getByRole('heading', { name: 'Your first CubeSat' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'New mission' })).toBeVisible()
+  await page.getByRole('button', { name: 'View last mission results' }).click()
+  await expect(page.getByText('2 usable batches received')).toBeVisible()
 })
 
 test('a returned review leads with the conflict and lets the player recover after reload', async ({ page }) => {
