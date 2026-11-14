@@ -3,6 +3,9 @@ import type { Message } from '../i18n/en'
 export type Design = Record<string, string>
 export type Cost = { weeks: number; credits: number }
 export type CostItem = Cost & { label: Message }
+export type Copy = { message: Message; values?: Record<string, string | number> }
+type Json = null | boolean | number | string | Json[] | JsonObject
+export type JsonObject = { [key: string]: Json }
 export type Work = 'assess' | 'freeze' | 'build' | 'integrate'
 export type Stage = 'feasibility' | 'design' | 'build' | 'integration' | 'review' | 'flight' | 'results'
 export type Gate = 'MDR' | 'PDR' | 'CDR' | 'FRR'
@@ -21,10 +24,52 @@ export type OptionGroup = { legend: Message; options: Record<string, DesignOptio
 export type Forecast = Record<string, any>
 export type TestResult = { design: Design; checks: boolean[] } & Record<string, any>
 export type Evidence = TestResult & { week: number; revision: number }
-export type FlightResult = { choice: string; delivered: boolean; stretch: boolean } & Record<string, any>
+export type FlightResult = {
+  choice: string; delivered: boolean; stretch: boolean
+  interruptedAt?: string
+  segments?: SegmentEntry[]
+} & Record<string, any>
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-export type Entry = { id: string; week: number; cost: number; design: Design; report?: Evidence; label?: Message }
+export type ReviewGate = Extract<Gate, 'PDR' | 'FRR'>
+export type Waiver = { id: string; label: Message; detail: Copy }
+export type Review = {
+  issues: readonly { detail: Copy; waiver?: Waiver }[]
+  approve?: Copy
+  return?: Copy
+}
+export type ReviewDecision = {
+  gate: ReviewGate
+  passed: boolean
+  waivers: { id: string; label: Message }[]
+  detail?: Copy
+}
+
+export type SegmentChoice = { id: string; label: Message; detail: Copy }
+export type SegmentEntry = { id: string; choice: string | null; report?: Copy }
+export type FlightProgress = { steps: SegmentEntry[]; state: JsonObject }
+export type FlightContext = { game: Game; evidence: Evidence | null; progress: FlightProgress }
+export type FlightSegment = {
+  id: string
+  title: Message
+  brief?(context: FlightContext): Copy
+  choices?(context: FlightContext): readonly SegmentChoice[]
+  resolve(context: FlightContext, choice: string | null): { failed?: boolean; state?: JsonObject; report?: Copy }
+}
+
+export type TimedJob =
+  | { type: 'work'; work: Work; lab?: { benchLead?: BenchLead; testFocus?: TestFocus } }
+  | { type: 'analyze' | 'wait' }
+  | { type: 'repair'; remedy: string }
+  | { type: 'task'; task: string }
+
+export type PendingWork = { job: TimedJob; cost: Cost; remaining: number }
+
+export type Entry = {
+  id: string; week: number; cost: number; design: Design; report?: Evidence; label?: Message
+  incomplete?: boolean
+  review?: ReviewDecision
+}
 
 export type Game = {
   missionId: string
@@ -49,14 +94,20 @@ export type Game = {
   testFocus?: TestFocus
   contact?: Contact
   configStep?: ConfigStep
+  pendingWork?: PendingWork
+  missionState?: JsonObject
+  flightProgress?: FlightProgress
 }
 
 export type Action =
   | { type: 'configure'; design: Design }
-  | { type: 'work' | 'analyze' | 'review' | 'wait' | 'cancel' }
+  | { type: 'work' | 'analyze' | 'wait' | 'cancel' }
+  | { type: 'task'; task: string; turn: number }
+  | { type: 'review'; waivers?: readonly string[]; turn?: number }
+  | { type: 'segment'; segment: string; choice: string | null }
   | { type: 'repair'; remedy: string }
   | { type: 'fly'; choice: string }
-  | { type: 'choose'; choice: string }
+  | { type: 'choose'; event?: string; choice: string }
   | { type: 'configStep'; step: ConfigStep }
   | { type: 'runLab'; benchLead?: BenchLead; testFocus?: TestFocus }
   | { type: 'advanceLab'; playback: LabPlayback; skip?: boolean }
@@ -64,12 +115,17 @@ export type Action =
   | { type: 'checkDiagnostics' }
   | { type: 'checkBatch'; batch: number; deliver: boolean }
 
-export type EventChoice = { id: string; label: Message; detail: Message; apply(game: Game): Game }
+export type EventChoice = {
+  id: string; label: Message; detail: Message
+  values?(game: Game): Record<string, string | number>
+  apply(game: Game): Game
+}
 
 export type MissionEvent = {
   id: string
   title: Message
   detail: Message
+  values?(game: Game): Record<string, string | number>
   trigger(game: Game): boolean
   choices: readonly EventChoice[]
 }
@@ -84,24 +140,38 @@ export type MissionRules = {
   playMinutes: string
   groups: Record<string, OptionGroup>
   initialDesign: Design
-  costs: Record<Work | 'analyze' | 'wait', CostItem> & Record<string, CostItem>
-  remedies: readonly string[]
+  costs: Record<string, CostItem>
+  remedies?: readonly string[]
   stageDetails: Record<Exclude<Stage, 'results'>, Message>
   outcomes: Record<'stopped' | 'extra' | 'success' | 'partial', Message>
   reputation: { minimum: number; stretch: number }
-  flightChoices: readonly string[]
+  flightChoices?: readonly string[]
   events?: readonly MissionEvent[]
+  initialize?(game: Game): Game
+  effectiveDeadline?(game: Game): number
+  stopReason?(game: Game): Exclude<Stop, 'cancelled'> | null
+  // When present, this is the chapter's work menu. IDs refer to entries in costs.
+  tasks?: Record<string, {
+    plan(game: Game): Cost | null
+    start?(game: Game): Game
+    complete(game: Game): Game
+  }>
+  reviews?: Partial<Record<ReviewGate, (game: Game, evidence: Evidence | null) => Review | null>>
+  segmentedFlight?: {
+    segments: readonly FlightSegment[]
+    finish(context: FlightContext, interruptedAt: string | null): FlightResult
+  }
   configurationSteps?: Partial<Record<Stage, readonly ConfigStep[]>>
   labSteps?(game: Game, kind: LabPlayback['kind']): number
   contact?: {
     plan(evidence: Evidence, choice: string): { batches: number; diagnostics: number }
     finish(evidence: Evidence, choice: string, accepted: number): FlightResult
   }
-  forecast(design: Design): Forecast
-  forecastClear(forecast: Forecast): boolean
-  test(design: Design): TestResult
-  applyRemedy(design: Design, remedy: string): Design
-  repairOptions(design: Design): string[]
-  fly(evidence: Evidence, choice: string): FlightResult
+  forecast?(design: Design): Forecast
+  forecastClear?(forecast: Forecast): boolean
+  test?(design: Design): TestResult
+  applyRemedy?(design: Design, remedy: string): Design
+  repairOptions?(design: Design): string[]
+  fly?(evidence: Evidence, choice: string): FlightResult
   records?(game: Game): string[]
 }

@@ -11,6 +11,10 @@ export function money(credits: number) {
   return dollars.format(credits * cubeSat.dollarsPerCredit)
 }
 
+export function missionMoney(mission: MissionRules, credits: number, t: Translate) {
+  return mission.id === cubeSat.id ? money(credits) : t('credits', { count: credits })
+}
+
 export function ActionButton({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button type="button" className="button primary" {...props}>{children}<ArrowRight size={17} aria-hidden /></button>
 }
@@ -34,12 +38,12 @@ export function Disclosure({ label, value, children }: { label: string; value?: 
   </details>
 }
 
-export function CostLabel({ t, weeks, credits }: { t: Translate; weeks: number; credits: number }) {
-  return <span className="cost">{t('weeks', { count: weeks })} · {money(credits)}</span>
+export function CostLabel({ t, weeks, credits, mission }: { t: Translate; weeks: number; credits: number; mission?: MissionRules }) {
+  return <span className="cost">{t('weeks', { count: weeks })} · {mission ? missionMoney(mission, credits, t) : money(credits)}</span>
 }
 
-export function optionValues({ params, cost, ...option }: DesignOption) {
-  return { ...option, ...params, ...(cost === undefined ? {} : { cost: money(cost) }) }
+export function optionValues({ params, cost, ...option }: DesignOption, mission: MissionRules) {
+  return { ...option, ...params, ...(cost === undefined ? {} : { cost: mission.id === cubeSat.id ? money(cost) : cost }) }
 }
 
 export function DesignSummary({ mission, design, t }: { mission: MissionRules; design: Design; t: Translate }) {

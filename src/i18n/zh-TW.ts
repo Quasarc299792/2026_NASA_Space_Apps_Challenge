@@ -1,6 +1,19 @@
 import type { Message } from './en'
 
 export const zhTW = {
+  credits: '{count} 經費',
+  logWork: '工作',
+  workPaused: '「{work}」在第 {week} 週暫停，尚需 {count} 週。',
+  workInterrupted: '工作提前中止。',
+  gateApproved: '{gate} 通過',
+  gateReturned: '{gate} 退回',
+  reviewWaivers: '可申請的豁免',
+  waiversUsed: '採用的豁免：{items}',
+  listSeparator: '、',
+  submitGate: '送交 {gate}',
+  segmentChoices: '飛行方案',
+  runSegment: '執行此飛行階段',
+  flightInterrupted: '飛行在「{segment}」階段中斷。',
   nextSupply: '選擇供電',
   nextRadio: '設定發訊計時',
   backPayload: '更改成像儀',
