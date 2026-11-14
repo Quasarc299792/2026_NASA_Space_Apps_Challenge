@@ -18,10 +18,17 @@ import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 const Team = lazy(() => import('./ui/Team'))
 
 type Screen = 'lobby' | 'brief' | 'single' | 'team'
-type SessionAction = Action | { type: 'new'; missionId: string; records: string[] }
+type SessionAction = Action | { type: 'new'; missionId: string; records: string[]; seed: number }
 
 function session(game: Game | null, action: SessionAction) {
-  return action.type === 'new' ? newGame(action.missionId, action.records) : game && runMission(game, action)
+  return action.type === 'new' ? newGame(action.missionId, action.records, action.seed) : game && runMission(game, action)
+}
+
+// Every run gets a seed. Add ?seed=123 to the address to replay a particular run.
+function runSeed() {
+  const requested = new URLSearchParams(window.location.search).get('seed')
+  if (requested && /^\d{1,9}$/.test(requested)) return Number(requested)
+  return crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000
 }
 
 function Lobby({ t, game, progress, open, resume, team }: {
@@ -98,7 +105,7 @@ function App() {
   }
 
   function begin() {
-    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress) })
+    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: runSeed() })
     setScreen('single')
   }
 

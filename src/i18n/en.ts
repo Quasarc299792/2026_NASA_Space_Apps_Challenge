@@ -719,13 +719,13 @@ export const en = {
   riskAcceptSign: 'Sign and fly',
   riskAccepted: 'Flew with accepted risks: {items}.',
   riskNoneAccepted: 'No risk needed a signature.',
-  riskDebriefNext: '{work} ({weeks} wk, {credits} cr) would have found it.',
+  riskDebriefNext: '{work} ({weeks} wk, {cost}) would have found it.',
   riskDebriefTop: 'Every test passed and the fault was still there. No test catches everything.',
   riskSeed: 'Run seed: {seed}',
   riskExternalNote: 'Verification does not change external events.',
   riskGameSetting: 'Risk percentages and ranges are game settings, not NASA figures.',
-  riskDebriefRange: '{work} ({weeks} wk, {credits} cr) would have narrowed it to {min}–{max} {unit}.',
-  riskDebriefMissed: '{work} ({weeks} wk, {credits} cr) would have passed and missed it.',
+  riskDebriefRange: '{work} ({weeks} wk, {cost}) would have narrowed it to {min}–{max} {unit}.',
+  riskDebriefMissed: '{work} ({weeks} wk, {cost}) would have passed and missed it.',
   riskFlightHeld: '{item} held. You had put the risk at {percent}%.',
   riskFlightFailed: '{item} failed. You had put the risk at {percent}%.',
   riskBeliefNote: 'Percentages show what you know now. A test changes what you know. It does not change the hardware.',
@@ -758,6 +758,8 @@ export const en = {
   riskTooCostly: 'That would leave too little for the required work.',
   riskFlightTitle: 'What the flight showed',
   riskCleanAll: 'Every risk item held. The percentages were what you knew, not what was there.',
+  riskOrFly: 'Or leave it, and sign for a known problem at flight review.',
+  riskFlewKnowingly: 'A test had found this problem and you chose to fly with it.',
 } as const
 
 export type Message = keyof typeof en
