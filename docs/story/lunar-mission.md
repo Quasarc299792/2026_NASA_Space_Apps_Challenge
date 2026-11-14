@@ -369,7 +369,7 @@ Astrobotic Peregrine 1 號在發射後推進系統失效，流失大量推進劑
 
 1. **多項工作與選做工作。** `doWork` 每個階段只執行一項固定工作。本章每個階段有多項必做工作，另有十項選做驗證、兩項修正和合約工作。缺的是「選一項工作來做」的動作，以及用 `gates` 的 `work` 清單檢查能否送審。
 2. **多週工作中的事件。** `spend` 可以一次扣多週，但事件只在工作結束後檢查。交期事件要能在多週工作中途的週次觸發。支援時段會讓實際週數和經費低於表列值。
-3. **種子和玩家的認知。** `Game` 還沒有種子。要加上種子和 `LunarKnowledge`：介面質量和修正量各驗到第幾級，著陸和月面操作各一個 `DefectState`（驗到第幾級、有沒有測出缺陷、修了沒）。`test(design)` 和 `fly(evidence, choice)` 目前只收設計，要能讀到這兩樣，才能呼叫 `lunarRisks`、`verifyLunar` 和 `flyLunar`。
+3. **玩家的認知。** `Game` 已經有 `seed`、`risks`、`accepted` 和 `outcomes`，引擎也有 `verify` 和 `fix` 兩個動作，立方衛星已經在用，見 [`cubesat.md`](cubesat.md#風險項目)。`game.risks` 目前只存有沒有缺陷這一類的 `DefectState`。本章還要存隱藏數值驗到第幾級，也就是 `LunarKnowledge`：介面質量和修正量各驗到第幾級，著陸和月面操作各一個 `DefectState`（驗到第幾級、有沒有測出缺陷、修了沒）。`test(design)` 和 `fly(evidence, choice)` 目前只收設計，要能讀到這兩樣，才能呼叫 `lunarRisks`、`verifyLunar` 和 `flyLunar`。
 4. **測出問題後的決策。** 驗證工作回報「測出缺陷」時，要讓玩家選修正（`fixes`）、換設計或照飛。可以用 `MissionEvent` 表達：`trigger` 看 `known.landing.found`，`choices` 各自套用結果。
 5. **合作狀態。** 需要記錄簽了哪份合約、已做幾週、剩幾個支援時段。簽約當下入帳預付款，做滿週數時入帳交件款和支援時段。合約未交件時 FRR 退回。`records` 的 `advanceShift` 是把交件款的一部分移到簽約時。
 6. **輕量化安裝座的兩種付法。** `mounts.lightweight` 同時有 `cost` 和 `supportSlots`，玩家擇一支付。`supportUses.verify` 讓一級驗證免經費。

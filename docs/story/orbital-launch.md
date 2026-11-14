@@ -325,7 +325,7 @@ SLS 芯級在首飛前做了完整時長的熱試車，四具引擎點火約八�
 
 1. **多項工作與選做工作。** `doWork` 每個階段只執行一項固定工作。本章的製造階段有兩項必做工作，另有六項選做驗證和一項修正。`costs` 已經能放任意鍵，缺的是「選一項工作來做」的動作，以及用 `gates` 的 `work` 清單檢查能否送審。
 2. **多週工作中的事件。** `spend` 可以一次扣多週，但事件只在工作結束後檢查。砍預算要能在第 2 週結束時觸發。
-3. **種子和玩家的認知。** `Game` 還沒有種子。要加上種子和 `OrbitalKnowledge`：運載性能驗到第幾級，以及資料鏈的 `DefectState`（驗到第幾級、有沒有測出缺陷、修了沒）。`test(design)` 和 `fly(evidence, choice)` 目前只收設計，要能讀到這兩樣，才能呼叫 `orbitalRisks`、`verifyOrbitalLink` 和 `flyOrbital`。
+3. **玩家的認知。** `Game` 已經有 `seed`、`risks`、`accepted` 和 `outcomes`，引擎也有 `verify` 和 `fix` 兩個動作，立方衛星已經在用，見 [`cubesat.md`](cubesat.md#風險項目)。`game.risks` 目前只存有沒有缺陷這一類的 `DefectState`。本章還要存隱藏數值驗到第幾級，也就是 `OrbitalKnowledge`：運載性能驗到第幾級，以及資料鏈的 `DefectState`（驗到第幾級、有沒有測出缺陷、修了沒）。`test(design)` 和 `fly(evidence, choice)` 目前只收設計，要能讀到這兩樣，才能呼叫 `orbitalRisks`、`verifyOrbitalLink` 和 `flyOrbital`。
 4. **測出問題後的決策。** 驗證工作回報「測出缺陷」時，要讓玩家選修正（`fixes.link`）、換設計或照飛。這可以用現有的 `MissionEvent` 表達：`trigger` 看 `known.link.found`，三個 `choices` 各自套用結果。
 5. **PDR 數值門檻。** `assess` 做完就直接進設計階段。要加一個可退回的檢查：`orbitalBestMargin` ≥ 0。
 6. **FRR 接受風險。** `review` 動作要帶簽字清單，和 `orbitalAcceptance` 比對後寫進紀錄。`passes(evidence)` 目前只看 `checks`。
