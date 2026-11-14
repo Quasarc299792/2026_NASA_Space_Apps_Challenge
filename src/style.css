@@ -49,8 +49,8 @@ svg { flex: none; }
 .lobby h1 { margin: 13px 0 17px; font-size: clamp(3rem, 6.6vw, 5.8rem); }
 .lobby-intro { font-size: 1.08rem; max-width: 34ch; }
 .lobby-duration { font-size: .8rem; margin: 20px 0 9px; }
-.lobby-photo img { width: 100%; height: auto; display: block; aspect-ratio: 4 / 3; object-fit: cover; background: #ddd9cc; }
-.lobby-photo figcaption { border-bottom: 1px solid var(--line); padding: 8px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 10px; font-size: .75rem; color: var(--muted); }
+.lobby-art img { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+.lobby-art figcaption { border-bottom: 1px solid var(--line); padding: 8px 0; font-size: .75rem; color: var(--muted); }
 .lobby-links { max-width: 620px; margin-top: 14px; }
 .lobby-team { width: 100%; min-height: 47px; display: flex; align-items: center; gap: 12px; padding: 8px 0; background: none; color: var(--accent); border: 0; border-bottom: 1px solid var(--line); text-align: start; font-weight: 680; }
 .lobby-team small { margin-left: auto; }
@@ -151,7 +151,6 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
   .shell { padding-block: 20px 42px; }
   .lobby { min-height: 0; grid-template-columns: 1fr; gap: 20px; padding: 6px 0 19px; }
   .lobby h1 { font-size: clamp(2.7rem, 10vw, 4.5rem); }
-  .lobby-photo img { aspect-ratio: 16 / 9; }
   .resource-line { gap: 7px 19px; }
   .resource-line > div { gap: 6px; }
 }
