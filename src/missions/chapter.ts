@@ -46,7 +46,6 @@ export function nextDefectCopy(state: DefectState, maturity: Maturity, work?: Co
   return { work, belief: percent(believedRisk(maturity, state.level + 1)) }
 }
 
-
 export function approvedWeek(game: Game) {
   return [...game.log].reverse().find(entry => entry.review?.gate === 'FRR' && entry.review.passed)?.week
 }

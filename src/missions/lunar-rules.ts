@@ -13,11 +13,11 @@ type Partner = 'funding' | 'tech'
 type Contract = { kind: Partner; weeks: number; left: number; milestone: number; slots: number; ended: boolean; late: boolean }
 type State = {
   contract: Contract | null; slots: number; extraKg: number; delay: number; secondPayload: boolean; interfaceDue: boolean
-  governmentCold: boolean; grant: boolean; icd: 'reviewed' | 'open' | null; repairs: LunarRisk[]
+  governmentCold: boolean; grant: boolean; icd: 'reviewed' | 'open' | null; deckIndex: number
 }
 const initial: State = {
   contract: null, slots: 0, extraKg: 0, delay: 0, secondPayload: false, interfaceDue: false,
-  governmentCold: false, grant: false, icd: null, repairs: [],
+  governmentCold: false, grant: false, icd: null, deckIndex: 0,
 }
 export const lunarState = (game: Game) => game.missionState as State
 export const lunarDesign = (game: Game) => game.design as LunarDesign
@@ -46,7 +46,7 @@ function configure(game: Game, design: Design) {
   const after = design as LunarDesign
   const changed = lunarRiskIds.filter(id => lunarItemId(before, id) !== lunarItemId(after, id))
   const risks = Object.fromEntries(Object.entries(game.risks).filter(([id]) => !changed.includes(id as LunarRisk)))
-  return set({ ...game, design, risks }, { repairs: lunarState(game).repairs.filter(id => !changed.includes(id)) })
+  return { ...game, design, risks }
 }
 
 function redesign(game: Game, design: LunarDesign): Game {
@@ -170,17 +170,10 @@ for (const id of lunarRiskIds) {
     support(step, costs[step].label, cost => ({ ...cost, credits: 0 }))
   })
   const fix = `fix:${id}`
-  costs[fix] = { ...mission.fix, label: 'lunarRecoveryFix' }
-  task(fix, game => lunarStates(game)[id].found && !lunarStates(game)[id].fixed && !lunarState(game).repairs.includes(id),
-    game => set(game, { repairs: [...lunarState(game).repairs, id] }), () => ({ message: 'lunarFixUnconfirmed' }))
-  const confirm = `confirm:${id}`
-  costs[confirm] = { weeks: 1, credits: 0, label: 'lunarRecoveryConfirm' }
-  tasks[confirm] = {
-    plan: game => lunarState(game).repairs.includes(id) ? costs[item.steps[lunarStates(game)[id].level - 1]] : null,
-    complete: game => set({ ...game, risks: { ...game.risks, [id]: { ...lunarStates(game)[id], fixed: true } } },
-      { repairs: lunarState(game).repairs.filter(risk => risk !== id) }),
-    detail: () => ({ message: 'lunarRiskRestored' }),
-  }
+  costs[fix] = mission.fix
+  task(fix, game => lunarStates(game)[id].found && !lunarStates(game)[id].fixed,
+    game => ({ ...game, risks: { ...game.risks, [id]: { ...lunarStates(game)[id], fixed: true } } }),
+    () => ({ message: 'lunarRiskRestored' }))
 }
 
 const remedies = {
@@ -209,7 +202,7 @@ function cardReady(game: Game, id: DevId) {
   if (slot < 0 || game.log.some(entry => entry.week === game.week && mission.devCards.some(card => card.id === entry.event))) return false
   const deck = lunarDevDeck(game.seed)
   if (slot === deck.pullInSlot) return id === 'PullIn'
-  return deck.order.find(candidate => !game.events.some(entry => entry.startsWith(`${candidate}:`)) && eligibleCard(game, candidate)) === id
+  return deck.order.slice(state.deckIndex).find(candidate => eligibleCard(game, candidate)) === id
 }
 
 function eligibleCard(game: Game, id: DevId) {
@@ -227,6 +220,10 @@ function eligibleCard(game: Game, id: DevId) {
 function chooseCard(game: Game, id: DevId, choice: string, effect: DevCard['choices'][number]['effect']): Game {
   const state = lunarState(game)
   let next = { ...game, credits: game.credits + (effect.credits ?? 0), deadline: game.deadline + (effect.deadline ?? 0) }
+  if (id !== 'PullIn' && id !== 'Camera' && id !== 'Review' && id !== 'SecondOffer') {
+    const index = lunarDevDeck(game.seed).order.indexOf(id)
+    next = set(next, { deckIndex: index + 1 })
+  }
   if (effect.massKg) {
     next = set(next, { extraKg: state.extraKg + effect.massKg })
     if (currentEvidence(game)) next = reviseDesign(next, next.design)
@@ -347,7 +344,7 @@ export const lunarRules: MissionRules = {
   validSave: game => {
     const state = lunarState(game)
     const decisions = game.flightProgress?.state.decisions
-    return Boolean(state && Array.isArray(state.repairs) && typeof state.slots === 'number' && typeof state.extraKg === 'number'
+    return Boolean(state && Number.isInteger(state.deckIndex) && typeof state.slots === 'number' && typeof state.extraKg === 'number'
       && (decisions === undefined || (Array.isArray(decisions) && decisions.every(item => typeof item === 'string'))) && lunarRisksReady(game))
   },
   effectiveDeadline: game => game.deadline - mission.routes[lunarDesign(game).route].leadWeeks,
@@ -370,7 +367,7 @@ export const lunarRules: MissionRules = {
     ...mission.devCards.map(toEvent), ...mission.storyEvents.map(toEvent),
     ...lunarRiskIds.map((id): MissionEvent => ({
       id: `found:${id}`, title: mission.risks[id].label, detail: mission.risks[id].found, file: missionFile(mission.risks[id]),
-      trigger: (game: Game) => lunarStates(game)[id].found && !lunarStates(game)[id].fixed && !lunarState(game).repairs.includes(id),
+      trigger: (game: Game) => lunarStates(game)[id].found && !lunarStates(game)[id].fixed,
       choices: [{ id: 'continue', label: 'lunarEventAcknowledge', detail: 'lunarFoundOptions', apply: (game: Game) => game }],
     })),
   ],

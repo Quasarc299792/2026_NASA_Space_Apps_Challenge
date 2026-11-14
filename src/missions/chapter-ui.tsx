@@ -57,7 +57,6 @@ function orbitalEstimate(game: Game, t: Translate) {
 function lunarEstimate(game: Game, t: Translate) {
   const d = lunarDesign(game)
   const states = lunarStates(game)
-  const state = lunarState(game)
   const mass = massBudget(game)
   return <>
     <p>{t('lunarPropellantLoaded', { ...mass, allocation: lunar.launchAllocationKg })} · {t('lunarPropellantNeed', { count: lunar.routes[d.route].propellantKg })}</p>
@@ -65,8 +64,7 @@ function lunarEstimate(game: Game, t: Translate) {
     {!completed(game, 'trade') && !game.evidence && <small>{t('lunarEstimateNote')}</small>}
     <RiskList t={t} odds={lunarOdds(d, states)} note="lunarForecastNote" risks={lunarRisks(d, states).map(item => ({
       ...item, label: lunar.risks[item.id].label,
-      notes: state.repairs.includes(item.id) ? <p>{t('lunarFixUnconfirmed')}</p>
-        : <DefectNotes state={states[item.id]} maturity={item.maturity} work={lunar.costs[lunar.risks[item.id].steps[item.level]]} t={t} />,
+      notes: <DefectNotes state={states[item.id]} maturity={item.maturity} work={lunar.costs[lunar.risks[item.id].steps[item.level]]} t={t} />,
     }))} />
   </>
 }
@@ -116,6 +114,9 @@ function LunarDebrief({ game, t }: { game: Game; t: Translate }) {
     {flight?.engineering && <p>{t(lunar.tags.engineering)}</p>}
     {flight?.cruiseData && <p>{t(lunar.tags.cruiseData)}</p>}
     {flight?.siteConfirmed && <p>{t(lunar.tags.siteConfirmed)}</p>}
+    {flight?.protectionOff && <p>{t('lunarRiskSoftwareDisable')}</p>}
+    {state.icd === 'open' && <p>{t('lunarCardIcdMismatchSkip')}</p>}
+    {game.events.includes('PartsAlert:Fly') && <p>{t('lunarPartsAccepted')}</p>}
     {flight && <p>{t('lunarFlightRemaining', { kg: flight.spareKg, credits: flight.credits })}</p>}
     {flight && risks.map(({ id, level, risk }) => {
       const item = lunar.risks[id]
