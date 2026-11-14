@@ -87,7 +87,7 @@ const remedies: Record<Remedy, (design: OrbitalDesign) => OrbitalDesign | null> 
   dualStation: design => design.ground === 'single' ? { ...design, ground: 'dual' } : null,
 }
 for (const [id, remedy] of Object.entries(remedies)) {
-  task(id, game => completed(game, 'freeze') && remedy(designOf(game)) !== null, game => {
+  task(id, game => (game.stage === 'build' || game.stage === 'integration' || game.stage === 'review') && remedy(designOf(game)) !== null, game => {
     const design = remedy(designOf(game))!
     return reviseDesign(configure(game, design), design)
   })
@@ -95,7 +95,7 @@ for (const [id, remedy] of Object.entries(remedies)) {
 
 for (const id of ['integrate', 'rehearse'] as const) {
   const labId = `lab:${id}`
-  costs[labId] = { ...costs[id], label: mission.labSlot.uses[id].label, credits: costs[id].credits - mission.labSlot.uses[id].creditsSaved }
+  costs[labId] = { ...costs[id], credits: costs[id].credits - mission.labSlot.uses[id].creditsSaved }
   tasks[labId] = {
     plan: game => orbitalState(game).lab && game.week < mission.labSlot.expiresWeek && tasks[id].plan(game) ? costs[labId] : null,
     start: game => set(game, { lab: false }),
@@ -109,7 +109,8 @@ function result(game: Game, choice: OrbitalPlan) {
 }
 
 export const orbitalRules: MissionRules = {
-  ...mission,
+  id: mission.id, title: mission.title, brief: mission.brief, deadline: mission.deadline, budget: mission.budget,
+  playMinutes: mission.playMinutes, initialDesign: mission.initialDesign,
   dialogue: 'orbitalBriefDialogue',
   groups: {
     stage: optionGroup('orbitalStage', mission.stages, option => ({ capacity: option.capacityKg, ...option.shortfallKg })),
@@ -119,6 +120,11 @@ export const orbitalRules: MissionRules = {
   },
   costs, tasks, configure,
   initialize: game => ({ ...game, missionState: { ...orbitalUnknown, lab: false } }),
+  validSave: game => {
+    const state = orbitalState(game)
+    return Boolean(state && Number.isInteger(state.lift) && state.lift >= 0 && state.lift <= topLevel && state.link &&
+      Number.isInteger(state.link.level) && state.link.level >= 0 && state.link.level <= topLevel && typeof state.lab === 'boolean')
+  },
   stageDetails: {
     feasibility: 'orbitalFeasibilityDetail', design: 'orbitalDesignDetail', build: 'orbitalBuildDetail',
     integration: 'orbitalIntegrationDetail', review: 'orbitalReviewDetail', flight: 'orbitalFlightDetail',
@@ -126,6 +132,9 @@ export const orbitalRules: MissionRules = {
   outcomes: { stopped: mission.outcomes.stopped.label, extra: mission.outcomes.extra.label, success: mission.outcomes.success.label, partial: mission.outcomes.incomplete.label },
   reputation: { minimum: 1, stretch: 1 },
   events: [
+    { id: 'foundLink', title: 'orbitalRiskLink', detail: 'riskTestFound',
+      trigger: game => orbitalState(game).link.found && !orbitalState(game).link.fixed,
+      choices: [{ id: 'continue', label: 'orbitalEventAcknowledge', detail: 'lunarFoundOptions', apply: game => game }] },
     { id: 'lab', title: 'orbitalLabSlot', detail: 'orbitalLabSlotDetail', values: () => ({ week: mission.labSlot.expiresWeek }),
       trigger: game => game.week === 0 && game.records.includes('cubesat:partnerVerified'),
       choices: [
@@ -169,10 +178,11 @@ export const orbitalRules: MissionRules = {
         id: 'ascent', title: 'orbitalAscentTitle', brief: () => ({ message: 'orbitalAscentCarried' }),
         resolve: ({ game }) => {
           const flight = result(game, 'confirmFirst')
-          return { failed: flight.stop === 'ascent', report: flight.stop === 'ascent'
+          const report: Copy = flight.stop === 'ascent'
             ? { message: 'orbitalAscentFail', values: { shortfall: flight.outcomes[0].value!, margin: flight.outcomes[0].limit! } }
             : { message: flight.marginProven ? 'orbitalAscentProven' : 'orbitalAscentPass',
-              values: { margin: flight.marginKg, threshold: mission.marginStretchKg } } }
+              values: { margin: flight.marginKg, threshold: mission.marginStretchKg } }
+          return { failed: flight.stop === 'ascent', report }
         },
       },
       {
@@ -181,7 +191,10 @@ export const orbitalRules: MissionRules = {
           .filter(id => id === 'confirmFirst' || mission.telemetry[designOf(game).telemetry].diagnosticUnits > 0)
           .map(id => ({ id, label: mission.passPlans[id].label, detail: { message: mission.passPlans[id].description,
             values: { confirmation: mission.confirmationUnits, diagnostics: mission.telemetry[designOf(game).telemetry].diagnosticUnits } } })),
-        resolve: ({ game }, choice) => ({ report: { message: 'orbitalPassReceipt', values: { confirmation: result(game, choice as OrbitalPlan).confirmation, diagnostics: result(game, choice as OrbitalPlan).diagnostics } } }),
+        resolve: ({ game }, choice) => {
+          const { confirmation, diagnostics } = result(game, choice as OrbitalPlan)
+          return { report: { message: 'orbitalPassReceipt', values: { confirmation, diagnostics } } }
+        },
       },
     ],
     finish: ({ game, progress }) => {

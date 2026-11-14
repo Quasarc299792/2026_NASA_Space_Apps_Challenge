@@ -62,7 +62,7 @@ function Lobby({ t, game, progress, open, resume, team }: {
       </button> : <Disclosure label={t('multiplayer')} value={t('teamSize')}><p>{t('roomDisabled')}</p></Disclosure>}
       <Disclosure label={t('availableMissions')} value={`${t('reputation')} · ${reputation(progress)}`}>
         <dl className="fact-list">
-          {missionCatalog.slice(1).map(({ id, title }, index) => <div key={id}>
+          {missionCatalog.slice(1).map(({ id, title }, index) => <div key={id} data-mission={id}>
             <dt>{t(title)}</dt>
             <dd>{!missions[id] ? t('planned') : isUnlocked(progress, id)
               ? <button className="text-button" onClick={() => open(id)}>{t('briefAction')}</button>
@@ -109,6 +109,13 @@ function App() {
     setScreen('single')
   }
 
+  function replay(sameSeed: boolean) {
+    if (!game) return
+    dispatch({ type: 'new', missionId: game.missionId, records: game.records,
+      seed: sameSeed ? game.seed : crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000 })
+    window.scrollTo(0, 0)
+  }
+
   function back() {
     if (screen === 'team') writeLocal(activeRoomKey, null)
     setScreen('lobby')
@@ -128,7 +135,7 @@ function App() {
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
       {screen === 'lobby' && <Lobby t={t} game={game} progress={progress} open={open} resume={() => setScreen('single')} team={() => setScreen('team')} />}
       {screen === 'brief' && <Brief mission={missions[selected]} t={t} saved={Boolean(game)} back={back} begin={begin} />}
-      {screen === 'single' && game && <Single game={game} mission={missions[game.missionId]} send={dispatch} back={back} t={t} />}
+      {screen === 'single' && game && <Single game={game} mission={missions[game.missionId]} send={dispatch} back={back} replay={replay} t={t} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
     </main>
   </>

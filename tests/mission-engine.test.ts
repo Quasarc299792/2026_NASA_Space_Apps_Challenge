@@ -91,7 +91,7 @@ test('paid multiweek work pauses and resumes from v2, then custom FRR approves a
   const approved = reload(runMission(unwaived, waive))
   assert.equal(approved.stage, 'flight')
   assert.equal(approved.returned, false)
-  assert.equal(approved.log.at(-1)?.review?.detail?.message, 'orbitalFrrPassAnalysis')
+  assert.equal(approved.log.at(-1)?.review?.detail?.message, 'chapterFrrApproved')
   assert.deepEqual(approved.log.at(-1)?.review?.waivers.map(item => item.id), ['reserve'])
   assert.equal(approved.credits, game.credits)
 })

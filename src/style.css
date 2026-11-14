@@ -309,3 +309,12 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
 .risk-item .button { justify-self: start; text-align: start; white-space: normal; }
 .risk-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 .risk-head span { font: .82rem/1.5 var(--mono); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -123,7 +123,7 @@ export function eventChoice(game: Game, eventId: string) {
   return game.events.find(entry => entry.startsWith(`${eventId}:`))?.slice(eventId.length + 1) ?? null
 }
 
-function record(game: Game, id: string, cost = 0, details: Partial<Pick<Game['log'][number], 'report' | 'label' | 'incomplete' | 'review' | 'detail'>> = {}): Game {
+function record(game: Game, id: string, cost = 0, details: Partial<Pick<Game['log'][number], 'report' | 'label' | 'incomplete' | 'review' | 'detail' | 'event'>> = {}): Game {
   return { ...game, log: [...game.log, { id, week: game.week, cost, design: game.design, ...details }] }
 }
 
@@ -346,7 +346,9 @@ export function runMission(game: Game, action: Action): Game {
       if (!event || (action.event !== undefined && action.event !== event.id) || !choice || choice.available?.(game) === false) return game
       const applied = choice.apply(game)
       const resolved = { ...applied, credits: Math.max(0, applied.credits), event: null, events: [...game.events, `${event.id}:${choice.id}`] }
-      const next = record(resolved, 'event', Math.max(0, game.credits - resolved.credits), { label: choice.label, ...(choice.result && { detail: { message: choice.result } }) })
+      const detail = choice.result?.(resolved)
+      const next = record(resolved, 'event', Math.max(0, game.credits - resolved.credits),
+        { label: choice.label, event: event.id, ...(detail && { detail }) })
       if (applied.credits < 0) return stop(next, 'funds')
       if (next.stage === 'results') return next
       const triggered = triggerEvent(next)

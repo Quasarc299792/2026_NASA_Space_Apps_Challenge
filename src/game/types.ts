@@ -56,6 +56,8 @@ export type FlightSegment = {
   title: Message
   brief?(context: FlightContext): Copy
   file?(context: FlightContext): MissionFile | undefined
+  quote?(context: FlightContext): Message | undefined
+  status?(context: FlightContext): Copy | undefined
   choices?(context: FlightContext): readonly SegmentChoice[]
   resolve(context: FlightContext, choice: string | null): { failed?: boolean; end?: boolean; continued?: boolean; state?: JsonObject; report?: Copy }
 }
@@ -73,6 +75,7 @@ export type Entry = {
   id: string; week: number; cost: number; design: Design; report?: Evidence; label?: Message
   incomplete?: boolean
   detail?: Copy
+  event?: string
   review?: ReviewDecision
 }
 
@@ -131,7 +134,7 @@ export type EventChoice = {
   id: string; label: Message; detail: Message
   values?(game: Game): Record<string, string | number>
   available?(game: Game): boolean
-  result?: Message
+  result?(game: Game): Copy
   apply(game: Game): Game
 }
 
@@ -141,6 +144,8 @@ export type MissionEvent = {
   detail: Message
   values?(game: Game): Record<string, string | number>
   file?: MissionFile
+  quote?: Message
+  subject?(game: Game): Message | undefined
   trigger(game: Game): boolean
   choices: readonly EventChoice[]
 }
@@ -191,6 +196,7 @@ export type MissionRules = {
   events?: readonly MissionEvent[]
   risks?: MissionRisks
   initialize?(game: Game): Game
+  validSave?(game: Game): boolean
   configure?(game: Game, design: Design): Game
   effectiveDeadline?(game: Game): number
   stopReason?(game: Game): Exclude<Stop, 'cancelled'> | null

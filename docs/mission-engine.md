@@ -4,7 +4,7 @@
 
 將章節的 `MissionRules` 註冊到 [rules.ts](../src/missions/rules.ts)，再將同一份規則與 `MissionUi` 組合成 [index.ts](../src/missions/index.ts) 的 `MissionModule`。大廳依既有章節順序與最低目標解鎖。共用 `Single` 會呈現設計選項、工作、事件、審查與飛行階段。用 `ui.Status({ game, t })` 顯示經費預估、合約與支援時段等工作台資訊，用 `ui.Estimate` 與 `ui.outcome` 讀取狀態並產生章節文案。選項的插值欄位放在 `DesignOption.params`，`cost` 以原始經費數字代入。
 
-`initialize(game)` 可讀取前局帶入的 `game.records`，在 `game.missionState` 建立本局資料。規則回呼須同步、純函式，並以新物件更新狀態。存檔沿用 `space-mission.single.v2`。自訂狀態使用 JSON 資料，工作、事件及飛行階段的 ID 在後續版本需維持穩定。
+`initialize(game)` 可讀取前局帶入的 `game.records`，在 `game.missionState` 建立本局資料。規則回呼須同步、純函式，並以新物件更新狀態。存檔沿用 `space-mission.single.v2`。每局的 `seed` 決定風險真相與事件牌序。自訂狀態使用 JSON 資料，工作、事件及飛行階段的 ID 在後續版本需維持穩定。
 
 ## 工作與事件
 
@@ -21,8 +21,8 @@
 
 ## 分段飛行與結算
 
-`segmentedFlight.segments` 依序定義階段。階段可從目前狀態與有效證據提供說明、選項和判定。無選項的階段以 `null` 執行。`resolve` 可以回傳 `report` 及下一段沿用的完整 `state`。選擇、報告及狀態會隨存檔保存，重整後從下一段開始。
+`segmentedFlight.segments` 依序定義階段。階段可從目前狀態與有效證據提供說明、選項和判定。無選項的階段以 `null` 執行。`resolve` 可以回傳 `report` 及下一段沿用的完整 `state`。回傳 `continued: true` 可留在同一階段等待下一個決策。選擇、報告及狀態會隨存檔保存，重整後從目前決策開始。
 
-最後一段完成或某段回傳 `failed: true` 時，由 `segmentedFlight.finish` 產生既有格式的 `FlightResult`。提早失敗時，引擎填入 `interruptedAt` 並結算為未交付，結果頁以階段標籤顯示中斷位置。`records(game)` 可從審查、飛行結果與本局狀態產生跨局紀錄，例如入軌案的 `onTime` 與 `verified`。既有進度機制負責合併紀錄、計算聲望與解鎖。
+最後一段完成或某段回傳 `end: true` 或 `failed: true` 時，由 `segmentedFlight.finish` 產生既有格式的 `FlightResult`。提早失敗時，引擎填入 `interruptedAt` 並結算為未交付，結果頁以階段標籤顯示中斷位置。`records(game)` 可從審查、飛行結果與本局狀態產生跨局紀錄，例如入軌案的 `onTime` 與 `verified`。既有進度機制負責合併紀錄、計算聲望與解鎖。
 
-[測試任務](../tests/fixtures/mission-engine.ts) 示範可用於兩章的接法，涵蓋多週整合、有效期限、PDR 退回、FRR 豁免及分段結算。章節數值與門檻見[入軌火箭](story/orbital-launch.md#實作備註)與[登月](story/lunar-mission.md#實作備註)的實作備註。
+[測試任務](../tests/fixtures/mission-engine.ts) 示範可用於兩章的接法，涵蓋多週整合、有效期限、PDR 退回、FRR 豁免及分段結算。章節數值與門檻見[入軌火箭](story/orbital-launch.md#實作備註)與[登月](story/lunar-mission.md#實作備註)。

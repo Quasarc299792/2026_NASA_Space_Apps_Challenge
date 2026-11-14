@@ -11,12 +11,12 @@ import type { Message, Translate } from '../i18n'
 import { missions, type MissionModule } from '../missions'
 import { cubeSat, forecast, planContact, powerTimeline, riskDebrief, scopeSegment, testDesign, type CubeSatDesign, type CubeSatEvidence, type CubeSatGame } from '../missions/cubesat'
 import { Findings, powerFinding, testedBatches } from '../missions/cubesat-ui'
-import { ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Heading, missionMoney, optionValues } from './shared'
+import { ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Heading, missionMoney, money, optionValues } from './shared'
 import { ReportCard } from './ReportCard'
 import { Lab } from './Lab'
 
 const stages: Stage[] = ['feasibility', 'design', 'build', 'integration', 'review', 'flight']
-type Props = { game: Game; mission: MissionModule; t: Translate; send: (action: Action) => void; back: () => void }
+type Props = { game: Game; mission: MissionModule; t: Translate; send: (action: Action) => void; back: () => void; replay: (sameSeed: boolean) => void }
 type Controls = Pick<Props, 'game' | 'mission' | 't' | 'send'>
 
 export function Brief({ mission, t, begin, back, saved }: {
@@ -299,12 +299,16 @@ function SegmentControls({ game, mission, send, t }: Controls) {
   const context = flightContext(game)
   const brief = segment.brief?.(context)
   const file = segment.file?.(context)
+  const quote = segment.quote?.(context)
+  const status = segment.status?.(context)
   const choices = segment.choices?.(context) ?? []
   return <>
     {context.progress.steps.length > 0 && <SegmentHistory mission={mission} steps={context.progress.steps} t={t} />}
     <h2>{t(segment.title)}</h2>
     {brief && <p>{copy(t, brief)}</p>}
     {context.progress.updates?.map((update, index) => <p key={index}>{copy(t, update)}</p>)}
+    {quote && <blockquote>{t(quote)}</blockquote>}
+    {status && <p className="action-note">{copy(t, status)}</p>}
     {file && <MissionFile file={file} t={t} />}
     {choices.length > 0 && <Options legend="segmentChoices" value={choice} choose={setChoice} t={t}
       options={choices.map(option => ({ id: option.id, name: option.label, detail: copy(t, option.detail) }))} />}
@@ -324,7 +328,7 @@ function ReviewControls({ game, send, t }: Controls) {
     {previous && !previous.passed && previous.detail && <p role="status">{copy(t, previous.detail)}</p>}
     {review.issues.some(issue => !issue.waiver) && <ul>{review.issues.filter(issue => !issue.waiver).map(({ detail, item }, index) => <li key={index}>{item && `${t(item)} · `}{copy(t, detail)}</li>)}</ul>}
     {offered.length > 0 && <fieldset className="options rows">
-      <legend>{t('reviewWaivers')}</legend>
+      <legend>{t('chapterReviewSign')}</legend>
       {offered.map(waiver => <label className="option" key={waiver.id}>
         <input type="checkbox" checked={waivers.includes(waiver.id)}
           onChange={event => setSelected(event.target.checked ? [...waivers, waiver.id] : waivers.filter(id => id !== waiver.id))} />
@@ -337,14 +341,14 @@ function ReviewControls({ game, send, t }: Controls) {
   </>
 }
 
-function Results({ game, mission, t, back }: Props) {
+function Results({ game, mission, t, back, replay }: Props) {
   const { flight, stop, evidence } = game
   const next = nextMission(game.missionId)
   const current = currentEvidence(game)
   const outcome = !flight ? mission.outcomes.stopped : flight.stretch ? mission.outcomes.extra
     : flight.delivered ? mission.outcomes.success : mission.outcomes.partial
   const customOutcome = mission.ui.outcome?.(game, t)
-  const spent = game.log.filter(entry => entry.id !== 'event').reduce((total, entry) => total + entry.cost, 0)
+  const spent = game.log.reduce((total, entry) => total + entry.cost, 0) + (game.flight?.credits === undefined ? 0 : game.credits - game.flight.credits)
   const interrupted = mission.segmentedFlight?.segments.find(segment => segment.id === flight?.interruptedAt)
   const stopCopy = { deadline: 'stopDeadline', funds: 'stopFunds', cancelled: 'stopCancelled' } as const
   const batches = (count: number) => t('dataBatches', { count })
@@ -371,7 +375,12 @@ function Results({ game, mission, t, back }: Props) {
       </Disclosure> : <div className="receipt-line"><span>{t('delivery')}</span><small>{t('noFlight')}</small></div>}
     </section>
     <RiskDebrief game={game} mission={mission} t={t} />
-    <ActionButton onClick={back}>{t('home')}</ActionButton>
+    {mission.ui.Debrief && <mission.ui.Debrief game={game} t={t} />}
+    <div className="action-row">
+      <ActionButton onClick={back}>{t('home')}</ActionButton>
+      <button className="button secondary" onClick={() => replay(true)}>{t('chapterReplaySame')}</button>
+      <button className="button secondary" onClick={() => replay(false)}>{t('chapterReplayNew')}</button>
+    </div>
     <div className="references">
       <p>{t('gates', { gate: game.gate })}</p>
       {game.log.length > 0 && <Disclosure label={t('log')}><DecisionLog game={game} mission={mission} t={t} /></Disclosure>}
@@ -462,14 +471,16 @@ function MissionEvent({ game, mission, t, send }: Controls) {
   const event = pendingEvent(game)
   if (!event) return null
   const work = pendingWorkId(game)
+  const subject = event.subject?.(game)
   return <section className="next-decision" aria-labelledby="mission-event">
     <h2 id="mission-event">{t(event.title)}</h2>
-    <p>{t(event.detail, event.values?.(game))}</p>
+    <p>{t(event.detail, { ...event.values?.(game), ...(subject && { item: t(subject) }) })}</p>
+    {event.quote && <blockquote>{t(event.quote)}</blockquote>}
     {work && <p className="notice">{t('workPaused', { work: t(mission.costs[work].label), week: game.week, count: game.pendingWork!.remaining })}</p>}
     {event.file && <MissionFile file={event.file} t={t} />}
     {event.choices.filter(choice => choice.available?.(game) !== false).map(choice => <div className="repair-option" key={choice.id}>
       <div><strong>{t(choice.label)}</strong><small>{t(choice.detail, choice.values?.(game))}</small></div>
-      <button className="button secondary" onClick={() => send({ type: 'choose', event: event.id, choice: choice.id })}>{t('eventChoose')}<span className="sr-only"> {t(choice.label)}</span></button>
+      <button className="button secondary" onClick={() => send({ type: 'choose', event: event.id, choice: choice.id })}>{t('eventChoose')}<span className="visually-hidden"> {t(choice.label)}</span></button>
     </div>)}
   </section>
 }
@@ -478,14 +489,19 @@ function MissionWork({ game, mission, t, send }: Controls) {
   const work = currentWork(game)
   const cost = !mission.tasks && work && workCost(game, work)
   const tasks = taskOptions(game)
+  const last = game.log.at(-1)?.detail
   return <div className="decisions">
+    {last && <p role="status">{copy(t, last)}</p>}
     {canConfigure(game) && Object.entries(mission.groups).map(([key, group]) =>
       <Options key={key} legend={group.legend} options={optionList(group.options, t, mission)} value={game.design[key]} t={t}
         choose={value => send({ type: 'configure', design: { ...game.design, [key]: value } })} />)}
-    {mission.tasks ? tasks.map(task =>
-      <ActionButton key={task.id} disabled={!affordable(game, task.cost)} onClick={() => send({ type: 'task', task: task.id, turn: game.log.length })}>
-        {t(mission.costs[task.id].label)} <CostLabel t={t} mission={mission} {...task.cost} />
-      </ActionButton>) : work && cost && !(game.gate === 'PDR' && mission.reviews?.PDR) &&
+    {mission.tasks ? tasks.map(task => {
+      const name = t(mission.costs[task.id].label, { ...task.cost, slots: 1 })
+      const support = task.id.startsWith('lab:') || task.id.startsWith('support:')
+      return <ActionButton key={task.id} disabled={!affordable(game, task.cost)} onClick={() => send({ type: 'task', task: task.id, turn: game.log.length })}>
+        {support ? t('lunarSupportTask', { work: name }) : name} <CostLabel t={t} mission={mission} {...task.cost} />
+      </ActionButton>
+    }) : work && cost && !(game.gate === 'PDR' && mission.reviews?.PDR) &&
       <ActionButton disabled={!affordable(game, cost)} onClick={() => send({ type: 'work' })}>
         {t(work === 'integrate' && game.evidence ? 'retest' : mission.costs[work].label)} <CostLabel t={t} mission={mission} {...cost} />
       </ActionButton>}
@@ -507,7 +523,7 @@ export function Single(props: Props) {
   return <article className="single-mission">
     <Back t={t} onClick={back} />
     <Heading eyebrow={t(mission.title)} title={t(game.returned ? 'returned' : stage)}>
-      {!isCubeSat && stage !== 'results' && t(game.returned ? 'returnedDetail' : mission.stageDetails[stage], { percent: 5 })}
+      {!isCubeSat && stage !== 'results' && t(game.returned ? 'returnedDetail' : mission.stageDetails[stage], { percent: percent(reviewRiskThreshold) })}
     </Heading>
     <dl className="resource-line">
       <div><dt>{t('flightWindow')}</dt><dd>{t('weeks', { count: availableWeeks(game) })}</dd></div>

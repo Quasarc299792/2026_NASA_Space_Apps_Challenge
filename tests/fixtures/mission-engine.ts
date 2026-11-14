@@ -86,7 +86,7 @@ export const fixtureMission: MissionRules = {
           } : undefined,
         }] : []),
       ],
-      approve: { message: 'orbitalFrrPassAnalysis' },
+      approve: { message: 'chapterFrrApproved' },
       return: { message: 'orbitalFrrReturn' },
     }),
   },

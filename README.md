@@ -57,7 +57,7 @@ npm run typecheck
 npm run build
 npm test
 npx playwright install chromium
-npm run test:browser -- tests/single.spec.ts
+npm run test:browser -- --grep-invert team.spec.ts
 npm run test:team
 ```
 
@@ -78,13 +78,13 @@ npm exec -- firebase deploy --only firestore:rules,hosting --project YOUR_PROJEC
 - 故事架構、任務分支和正式任務文案草稿放在 [`docs/story/`](docs/story/)。
 - 在 [繁中](src/i18n/zh-TW.ts)與[英文](src/i18n/en.ts)字典更新 `briefStory`、`briefDialogue`、各角色的 `*Brief`、階段說明和結局文案。保留 `{count}` 等變數供遊戲填入數值。
 - 在 [`src/missions/cubesat.ts`](src/missions/cubesat.ts) 調整初始配置、選項、成本、門檻和部門提案。變更多人提案 ID 或代提方案時，也需更新 [`firestore.rules`](firestore.rules) 並重跑 `npm run test:team`。
-- 大廳會顯示團隊聲望與後續任務進度。入軌火箭和登月仍在規劃中。原型的實際操作範圍是立方衛星單人任務和多人整合審查。
+- 大廳會顯示團隊聲望與後續任務進度。單人模式依序解鎖立方衛星、入軌火箭和登月。多人模式提供立方衛星整合審查。
 
 ### 新增任務
 
 遊戲規則在 [`src/game/mission.ts`](src/game/mission.ts)，各任務共用。新增一個任務的步驟：
 
-1. 在 `src/missions/` 新增規則檔，匯出符合 [`MissionRules`](src/game/types.ts) 的物件。內容包括選項組 `groups`、各項工作的成本 `costs`、整合測試判定 `test`、補救方式 `remedies`、任務模擬 `fly`、結局文案 `outcomes`、聲望 `reputation`，以及可選的固定觸發事件 `events` 和風險項目 `risks`。可以參考 [`cubesat.ts`](src/missions/cubesat.ts)。
+1. 在 `src/missions/` 新增規則檔，匯出符合 [`MissionRules`](src/game/types.ts) 的物件。內容包括選項組 `groups`、各項工作的成本 `costs`、整合測試判定 `test`、補救方式 `remedies`、任務模擬 `fly`、結局文案 `outcomes`、聲望 `reputation`，以及可選的固定觸發事件 `events` 和風險項目 `risks`。立方衛星可參考 [`cubesat.ts`](src/missions/cubesat.ts)。多週工作、審查和分段飛行見[任務引擎](docs/mission-engine.md)。
 2. 在 [`src/missions/rules.ts`](src/missions/rules.ts) 的 `missionRules` 登記，`missionCatalog` 的順序就是解鎖順序。
 3. 新增對應的畫面元件（參考 [`cubesat-ui.tsx`](src/missions/cubesat-ui.tsx)），在 [`src/missions/index.ts`](src/missions/index.ts) 的 `missions` 登記。
 4. 文案加進兩份 i18n 字典。

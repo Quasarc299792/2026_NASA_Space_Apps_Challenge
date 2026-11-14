@@ -292,6 +292,7 @@ export const cubeSatRules: MissionRules = {
   },
   outcomes: { stopped: 'outcomeStopped', extra: 'outcomeExtra', success: 'outcomeSuccess', partial: 'outcomePartial' },
   reputation: { minimum: 1, stretch: 1 },
+  records: game => game.flight?.delivered && game.evidence?.checks.every(Boolean) ? ['cubesat:partnerVerified'] : [],
   flightChoices,
   risks: cubeSatRisks,
   configurationSteps: { feasibility: ['payload', 'supply'], design: ['schedule', 'radio'] },

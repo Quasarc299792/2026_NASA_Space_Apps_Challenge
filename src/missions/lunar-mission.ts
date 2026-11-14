@@ -5,7 +5,7 @@ import {
 } from '../game/risk'
 
 // Story design: docs/story/lunar-mission.md. Real mission references: docs/story/lunar-history.md (H01–H32).
-// Every number in this file is a game setting. The chapter is not wired into src/game/mission.ts yet.
+// Every number in this file is a game setting.
 
 type Source = { source: string; url: string }
 
@@ -365,7 +365,7 @@ type Keys = AnyCard['title' | 'detail' | 'quote' | 'file'] | AnyChoice['label' |
   | Values<typeof lunarMission.payloads | typeof lunarMission.sensors | typeof lunarMission.powers | typeof lunarMission.routes | typeof lunarMission.mounts | typeof lunarMission.partnerships>['label' | 'description']
   | Values<typeof lunarMission.records>['label'] | Values<typeof lunarMission.gates>['pass'] | typeof lunarMission.title | typeof lunarMission.brief
 type Missing = Exclude<Keys, Message>
-const everyKeyExists: [Missing] extends [never] ? true : Missing = true
+const everyKeyExists: Record<Missing, never> = {}
 void everyKeyExists
 // Cards carry the fields of MissionEvent that need no engine state: id, title, detail and choices with id, label, detail.
 type EventShape = { id: string; title: Message; detail: Message; choices: readonly { id: string; label: Message; detail: Message }[] }
@@ -451,7 +451,12 @@ export type LunarPick = (prompt: string, options: readonly string[], view: { spa
 export type LunarStep = { segment: string; prompt?: string; choice?: string; failed?: LunarRisk; spareKg: number; credits: number }
 
 // Seven-step flight. Nothing is rolled: card draws and every item's truth come from the seed, the rest is fixed rules.
-export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
+export type LunarFlightView = { spareKg: number; credits: number; windows: number }
+export type LunarFlightUpdate =
+  | { type: 'decision'; segment: string; prompt: string; options: readonly string[]; view: LunarFlightView }
+  | { type: 'segment'; segment: string; view: LunarFlightView }
+
+export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFlightUpdate, LunarFlightResult, string | null> {
   const { design, states } = setup
   const cards = lunarFlightCards(seed)
   const payload = lunarMission.payloads[design.payload]
@@ -473,8 +478,10 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
 
   const effect = (list: readonly { id: string; effect: Effect }[], id: string) => list.find(item => item.id === id)!.effect
   const apply = (change: Effect) => { credits += change.credits ?? 0; spareKg += change.propellantKg ?? 0; windows += change.windows ?? 0 }
-  const ask = (prompt: string, options: readonly string[]) => {
-    const choice = pick(prompt, options, { spareKg, credits, windows })
+  const view = () => ({ spareKg, credits, windows })
+  function* ask(prompt: string, options: readonly string[]): Generator<LunarFlightUpdate, string, string | null> {
+    const choice = yield { type: 'decision', segment, prompt, options, view: view() }
+    if (choice === null) throw new Error(`${prompt}: choice required`)
     if (!options.includes(choice)) throw new Error(`${prompt}: ${choice} is not available`)
     steps.push({ segment, prompt, choice, spareKg, credits })
     return choice
@@ -489,34 +496,36 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
     return there
   }
   const checked = (id: LunarRisk) => !exposed.has(id) && (states[id].fixed || (!states[id].found && states[id].level >= lunarMission.checkedLevel))
-  const end = (outcome: LunarOutcome, critical: LunarRisk | 'reserve' | 'choice', batches = 0, upright = false) => {
+  const end = (outcome: LunarOutcome, critical: LunarRisk | 'reserve' | 'choice', batches = 0, upright = false): LunarFlightResult => {
     let closing: LunarClosing
     if (outcome === 'success' || outcome === 'extra') closing = failures.length ? 'recovered' : flown.filter(id => !checked(id)).length <= 1 ? 'checked' : 'unchecked'
     else if (critical === 'choice') closing = 'tradeoff'
     else if (critical === 'reserve') closing = 'listed'
     else closing = checked(critical) ? 'missed' : 'listed'
-    return { outcome, closing, critical, upright, batches, segment, failures, flown, steps, spareKg, credits, cruiseData, engineering, protectionOff, secondPayloadUsable: Boolean(setup.secondPayload) && upright, cards }
+    return { outcome, closing, critical, upright, batches, segment, failures, flown, steps, spareKg, credits, cruiseData, engineering, protectionOff, secondPayloadUsable: Boolean(setup.secondPayload) && upright, cards, exposed: [...exposed] }
   }
   const lost = (critical: LunarRisk | 'reserve') => end(cruiseData ? 'salvage' : 'lost', critical)
 
   // 1 Launch
+  yield { type: 'segment', segment, view: view() }
   const launch = lunarMission.launchCards.find(item => item.id === cards.launch)!
   if (launch.id === 'Scrub') {
-    const choice = ask('card:Scrub', credits >= 8 ? ['Wait', 'Rush'] : ['Rush'])
+    const choice = yield* ask('card:Scrub', credits >= 8 ? ['Wait', 'Rush'] : ['Rush'])
     if (choice === 'Rush') exposed.add('software'); else apply(effect(launch.choices, choice))
   } else if (launch.id === 'Weather') {
-    const choice = ask('card:Weather', credits >= 6 ? ['Rollback', 'Slip'] : ['Slip'])
+    const choice = yield* ask('card:Weather', credits >= 6 ? ['Rollback', 'Slip'] : ['Slip'])
     if (choice === 'Slip') correctionExtra = 2; else apply(effect(launch.choices, choice))
   } else {
-    const choice = ask('card:Lightning', states.software.level >= 3 && !states.software.found ? ['Check', 'Press', 'Switch'] : ['Check', 'Press'])
+    const choice = yield* ask('card:Lightning', states.software.level >= 3 && !states.software.found ? ['Check', 'Press', 'Switch'] : ['Check', 'Press'])
     if (choice === 'Press') exposed.add('software'); else apply(effect(launch.choices, choice))
   }
 
   // 2 Earth-orbit checkout
   segment = 'checkout'
+  yield { type: 'segment', segment, view: view() }
   if (defect('software')) {
     const cost = setup.icd === 'reviewed' ? 0 : 6 + (setup.icd === 'open' ? lunarMission.uplinkOpenExtra : 0)
-    const choice = ask('risk:software', credits >= cost ? ['Uplink', 'Wait', 'Disable'] : ['Wait', 'Disable'])
+    const choice = yield* ask('risk:software', credits >= cost ? ['Uplink', 'Wait', 'Disable'] : ['Wait', 'Disable'])
     if (choice === 'Uplink') credits -= cost
     else if (choice === 'Wait') apply(effect(lunarMission.responses.software, choice))
     else protectionOff = true
@@ -524,14 +533,15 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
 
   // 3 Lunar transfer
   segment = 'transfer'
+  yield { type: 'segment', segment, view: view() }
   if (cards.cruise === 'CruiseScience') {
-    const choice = ask('card:CruiseScience', credits >= 4 ? ['On', 'Off'] : ['Off'])
+    const choice = yield* ask('card:CruiseScience', credits >= 4 ? ['On', 'Off'] : ['Off'])
     if (choice === 'On') { credits -= 4; cruiseData = true; payloadChecked = true }
   }
   spareKg -= lunarMission.routes[design.route].correctionKg + correctionExtra
   if (defect('pressure')) {
     spareKg -= lunarMission.pressureLossKg
-    const choice = ask('risk:pressure', spareKg >= 0 ? ['Emergency', 'Continue', 'Flyby', 'Diagnose'] : ['Emergency', 'Flyby', 'Diagnose'])
+    const choice = yield* ask('risk:pressure', spareKg >= 0 ? ['Emergency', 'Continue', 'Flyby', 'Diagnose'] : ['Emergency', 'Flyby', 'Diagnose'])
     if (choice === 'Emergency') { apply(effect(lunarMission.responses.pressure, choice)); exposed.add('descent') }
     else if (choice === 'Flyby') return end('salvage', 'pressure')
     else if (choice === 'Diagnose') { engineering = true; return end('lost', 'pressure') }
@@ -539,20 +549,22 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
 
   // 4 Lunar orbit insertion
   segment = 'orbit'
+  yield { type: 'segment', segment, view: view() }
   if (spareKg < 0) return lost(failures.at(-1) ?? 'reserve')
   if (defect('thrusters')) {
     if (lunarSeverity(design, 'thrusters', protectionOff) === 'fatal') return lost('thrusters')
-    const choice = ask('risk:thrusters', [...(credits >= 6 && spareKg >= 2 ? ['Simulate'] : []), ...(spareKg >= 6 ? ['Reverse'] : []), 'Flyby'])
+    const choice = yield* ask('risk:thrusters', [...(credits >= 6 && spareKg >= 2 ? ['Simulate'] : []), ...(spareKg >= 6 ? ['Reverse'] : []), 'Flyby'])
     if (choice === 'Flyby') return end('salvage', 'thrusters')
     apply(effect(lunarMission.responses.thrusters, choice))
   }
 
   // 5 Descent
   segment = 'descent'
+  yield { type: 'segment', segment, view: view() }
   let upright = true
   if (defect('descent')) {
     if (!backup) return lost('descent')
-    const choice = ask('risk:descent', spareKg >= 3 ? ['Patch', 'Switch', 'Abort'] : ['Switch', 'Abort'])
+    const choice = yield* ask('risk:descent', spareKg >= 3 ? ['Patch', 'Switch', 'Abort'] : ['Switch', 'Abort'])
     if (choice === 'Abort') return end('salvage', 'descent')
     if (choice === 'Patch') { apply(effect(lunarMission.responses.descent, choice)); upright = states.descent.level >= lunarMission.checkedLevel && !exposed.has('descent') }
     else upright = false
@@ -561,8 +573,9 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
 
   // 6 First lunar day
   segment = 'surface'
+  yield { type: 'segment', segment, view: view() }
   if (cards.cruise === 'Eclipse') {
-    const choice = ask('card:Eclipse', nightWindows > 0 ? ['Shelter', 'Battery', 'Exposed'] : ['Shelter', 'Exposed'])
+    const choice = yield* ask('card:Eclipse', nightWindows > 0 ? ['Shelter', 'Battery', 'Exposed'] : ['Shelter', 'Exposed'])
     if (choice === 'Shelter') windows -= 1
     else if (choice === 'Battery') nightWindows -= 1
     else exposed.add('payload')
@@ -570,12 +583,12 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
   windows += nightWindows
   let downlink: number = lunarMission.downlinkWindows
   if (defect('payload')) {
-    const choice = ask('risk:payload', ['Restart', 'LowRate', 'Engineering'])
+    const choice = yield* ask('risk:payload', ['Restart', 'LowRate', 'Engineering'])
     if (choice === 'Restart') windows -= payloadChecked ? 0 : 1
     else if (choice === 'LowRate') downlink += 1
     else { engineering = true; return end('noData', 'payload', 0, upright) }
   }
-  const plan = ask('plan', Object.keys(lunarMission.surfacePlans)) as LunarPlan
+  const plan = (yield* ask('plan', Object.keys(lunarMission.surfacePlans))) as LunarPlan
   const reserved = lunarMission.surfacePlans[plan].reservedWindows
   if (reserved) engineering = true
   const usable = Math.max(0, windows - reserved)
@@ -586,7 +599,8 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
 
   // 7 Lunar night
   segment = 'night'
-  if (upright && credits >= lunarMission.wakeCredits && ask('night', ['rest', 'wake']) === 'wake') {
+  yield { type: 'segment', segment, view: view() }
+  if (upright && credits >= lunarMission.wakeCredits && (yield* ask('night', ['rest', 'wake'])) === 'wake') {
     credits -= lunarMission.wakeCredits
     if (!defect('night')) {
       left += lunarMission.wakeWindows
@@ -601,4 +615,21 @@ export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
   }
   const extra = batches >= lunarMission.stretchBatches || (Boolean(setup.secondPayload) && upright)
   return end(extra ? 'extra' : 'success', 'choice', batches, upright)
+}
+
+export type LunarFlightResult = {
+  outcome: LunarOutcome; closing: LunarClosing; critical: LunarRisk | 'reserve' | 'choice'; upright: boolean
+  batches: number; segment: string; failures: LunarRisk[]; flown: LunarRisk[]; steps: LunarStep[]; spareKg: number
+  credits: number; cruiseData: boolean; engineering: boolean; protectionOff: boolean; secondPayloadUsable: boolean
+  cards: ReturnType<typeof lunarFlightCards>; exposed: LunarRisk[]
+}
+
+export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {
+  const flight = lunarFlight(seed, setup)
+  let next = flight.next()
+  while (!next.done) {
+    const update = next.value
+    next = flight.next(update.type === 'decision' ? pick(update.prompt, update.options, update.view) : null)
+  }
+  return next.value
 }

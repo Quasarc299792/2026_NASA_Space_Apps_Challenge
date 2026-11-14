@@ -2,7 +2,7 @@
 
 團隊接到入軌示範合約。最低要求是把無人測試酬載送入指定軌道，並交付足以確認示範結果的資料。團隊還希望提高承載餘裕，或多帶回一組飛行診斷資料。
 
-資料檔和風險規則在 [`src/missions/orbital-launch.ts`](../../src/missions/orbital-launch.ts)，文案鍵都以 `orbital` 開頭。共用的風險規則在 [`src/game/risk.ts`](../../src/game/risk.ts)，說明在 [README「突發事件與測試結果」](../../README.md#突發事件與測試結果)。本章尚未接上規則引擎。[`tests/orbital-launch.test.ts`](../../tests/orbital-launch.test.ts) 依本文件的規則，用固定種子重跑每條驗算路線，並對每種策略跑 2000 個種子。
+資料檔和風險規則在 [`src/missions/orbital-launch.ts`](../../src/missions/orbital-launch.ts)，文案鍵都以 `orbital` 開頭。共用的風險規則在 [`src/game/risk.ts`](../../src/game/risk.ts)，說明在 [README「突發事件與測試結果」](../../README.md#突發事件與測試結果)。章節由 [`orbital-rules.ts`](../../src/missions/orbital-rules.ts) 接入共用引擎。[`tests/orbital-launch.test.ts`](../../tests/orbital-launch.test.ts) 依本文件的規則，用固定種子重跑每條驗算路線，並對每種策略跑 2000 個種子。
 
 文中的質量、經費、週數、門檻、百分比和數值範圍都是**遊戲設定**，不是 NASA 的數字。工程因果對照 NASA 來源，連結附在各節。
 
@@ -310,28 +310,4 @@ SLS 芯級在首飛前做了完整時長的熱試車，四具引擎點火約八�
 
 ## 實作備註
 
-本章只有資料、規則函式、文案和測試，還沒有登記到 [`src/missions/rules.ts`](../../src/missions/rules.ts)。下面對照 [`src/game/types.ts`](../../src/game/types.ts) 的 `MissionRules`、`Game` 和 `MissionEvent` 現況。
-
-引擎已經有的：
-
-| 需求 | 現況 |
-| --- | --- |
-| 依任務切換規則 | `missionRules[game.missionId]`。 |
-| 選項組和定版時付硬體費 | `groups` 的 `cost` 在 `freeze` 時加總。 |
-| 砍預算事件 | `MissionEvent` 的 `trigger` 看週數，`apply` 扣 `credits`。 |
-| 履歷輸出和讀取 | `records(game)` 回傳 `onTime`、`verified`。開局的實驗室時段讀 `game.records`。 |
-
-接上本章還缺的：
-
-1. **多項工作與選做工作。** `doWork` 每個階段只執行一項固定工作。本章的製造階段有兩項必做工作，另有六項選做驗證和一項修正。`costs` 已經能放任意鍵，缺的是「選一項工作來做」的動作，以及用 `gates` 的 `work` 清單檢查能否送審。
-2. **多週工作中的事件。** `spend` 可以一次扣多週，但事件只在工作結束後檢查。砍預算要能在第 2 週結束時觸發。
-3. **玩家的認知。** `Game` 已經有 `seed`、`risks`、`accepted` 和 `outcomes`，引擎也有 `verify` 和 `fix` 兩個動作，立方衛星已經在用，見 [`cubesat.md`](cubesat.md#風險項目)。`game.risks` 目前只存有沒有缺陷這一類的 `DefectState`。本章還要存隱藏數值驗到第幾級，也就是 `OrbitalKnowledge`：運載性能驗到第幾級，以及資料鏈的 `DefectState`（驗到第幾級、有沒有測出缺陷、修了沒）。`test(design)` 和 `fly(evidence, choice)` 目前只收設計，要能讀到這兩樣，才能呼叫 `orbitalRisks`、`verifyOrbitalLink` 和 `flyOrbital`。
-4. **測出問題後的決策。** 驗證工作回報「測出缺陷」時，要讓玩家選修正（`fixes.link`）、換設計或照飛。這可以用現有的 `MissionEvent` 表達：`trigger` 看 `known.link.found`，三個 `choices` 各自套用結果。
-5. **PDR 數值門檻。** `assess` 做完就直接進設計階段。要加一個可退回的檢查：`orbitalBestMargin` ≥ 0。
-6. **FRR 接受風險。** `review` 動作要帶簽字清單，和 `orbitalAcceptance` 比對後寫進紀錄。`passes(evidence)` 目前只看 `checks`。
-7. **分段模擬。** `flyOrbital` 一次算完上升和通聯。接引擎時拆成兩步，中間讓玩家選通聯計畫。飛行不擲骰，拆開後結果不變。
-8. **換設計就是換項目。** 資料鏈的真相用 `orbitalLinkId` 分辨。遙測方案或地面站一變，資料鏈的認知要重設成沒驗證。整合後的返工要重測。
-9. **結算說明。** `orbitalNextStep` 回傳下一級驗證的工作、花費，以及它會測出問題還是漏掉。它會讀真相，只能用在結算，不能顯示在工作台。
-10. **畫面。** `MissionUi` 要有風險清單、預估成功率、測試結果、接受風險和分段結算的元件。共用文案鍵以 `risk` 開頭。
-11. **額外目標二擇一。** 承載餘裕要同時滿足運載性能驗到熱試車，以及實際餘裕 ≥ `marginStretchKg`。診斷資料要 3 單位全數收到。
-12. **多人提案。** `orbitalProposals` 列出三個組別可提的返工。接多人模式時要同步更新 `firestore.rules`。
+入軌章用 [`orbital-launch.ts`](../../src/missions/orbital-launch.ts) 的種子、驗證與飛行規則判定風險，由 [`orbital-rules.ts`](../../src/missions/orbital-rules.ts) 安排工作和審查。完成最低要求時傳遞 `onTime` 或 `verified` 紀錄，條件見「結局與後續」。事件暫停與續存見[任務引擎](../mission-engine.md)。

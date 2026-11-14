@@ -1,6 +1,6 @@
 import type { Copy, CostItem, Design, DesignOption, Evidence, Game, Review } from '../game/types'
 import type { Message } from '../i18n'
-import { believedRisk, detection, percent, reviewRiskThreshold, topLevel, type DefectState, type Maturity, type Severity } from '../game/risk'
+import { believedRisk, detection, percent, topLevel, type DefectState, type Maturity, type Severity } from '../game/risk'
 
 export function completed(game: Game, id: string) {
   return game.log.some(entry => (entry.id === id || entry.id === `lab:${id}` || entry.id === `support:${id}`) && !entry.incomplete)
@@ -46,8 +46,7 @@ export function nextDefectCopy(state: DefectState, maturity: Maturity, work?: Co
   return { work, belief: percent(believedRisk(maturity, state.level + 1)) }
 }
 
-export const reviewThreshold = { percent: percent(reviewRiskThreshold) }
 
 export function approvedWeek(game: Game) {
-  return game.log.findLast(entry => entry.review?.gate === 'FRR' && entry.review.passed)?.week
+  return [...game.log].reverse().find(entry => entry.review?.gate === 'FRR' && entry.review.passed)?.week
 }

@@ -4,7 +4,7 @@
 
 這份文件是第二版的故事架構。真實任務事件表在 [`lunar-history.md`](lunar-history.md)，文中用 H01–H32 引用。
 
-**目前進度：** 資料檔 [`src/missions/lunar-mission.ts`](../../src/missions/lunar-mission.ts) 已照本文件實作，含七步飛行模擬 `flyLunar`。開發期的規則由 [`tests/lunar-run.ts`](../../tests/lunar-run.ts) 重跑，[`tests/lunar-mission.test.ts`](../../tests/lunar-mission.test.ts) 驗算每個結局的固定種子路線、重現、平衡和可達性。本章尚未接上規則引擎和畫面。共用風險規則 [`src/game/risk.ts`](../../src/game/risk.ts) 取自 `codex/risk-rules`。
+章節以 [`lunar-rules.ts`](../../src/missions/lunar-rules.ts) 接入工作台，並以 [`lunar-mission.ts`](../../src/missions/lunar-mission.ts) 的模擬器判定飛行。[固定種子測試](../../tests/lunar-mission.test.ts)包含結局矩陣與策略平衡。
 
 文中的質量、經費、週數和門檻都是**遊戲設定**。工程因果對照 NASA 來源，連結附在各節和來源對照表。
 
@@ -1205,20 +1205,4 @@ H 編號的來源連結在 [`lunar-history.md`](lunar-history.md)。真實任務
 
 ## 實作備註
 
-引擎和畫面這次都沒有改。接上登月關卡時需要下列支援。
-
-1. **依任務切換規則。** `src/game/mission.ts` 直接匯入 `cubeSat`。登月的設計欄位是酬載、感測器、供電、路線、安裝座，判定改看質量餘裕和操作時段。
-2. **多週工作。** `costs` 和 `remedies` 的 `weeks` 會大於 1。支援時段和事件會改變實際週數和經費。事件要能在多週工作中途的週次觸發。
-3. **合作狀態。** 記錄簽了哪份合約、已做幾週、剩幾個支援時段、是否已終止。補位合約的條件和開局不同。
-4. **履歷讀取。** `records` 要讀上一章的結算紀錄。
-5. **事件牌堆。** `MissionEvent` 的 `trigger(game)` 目前是固定條件。牌堆需要：抽牌時點、用種子洗牌、D1 保證出現在前兩張、條件不成立時該週無事。`EventChoice.apply` 夠表達每個選項的效果，但選項要能依狀態停用（例如經費不夠、沒有備援光達）。
-6. **風險項目狀態。** 每個項目記三件事：開局抽好的真相（有沒有缺陷）、驗證等級 0–3、測試是否已回報問題和是否修過。驗證工作、事件選項和應對都能升降等級，只有「修」和「換設計」能改真相。形狀照入軌章的 `risks`：`kind`、`severity`、`segment`、三個 `steps`。R3 和 R4 的 `severity` 會隨狀態改變（保護是否關閉、有沒有備援光達），要用函式算。
-7. **FRR 簽收。** 送審動作要帶豁免和已接受的風險清單，寫進紀錄。D3 的補助會讓某一項不能簽收。
-8. **七步模擬。** 飛行狀態要記推進劑餘裕、經費、月面時段、留下的時段、故障保護是否關閉、有沒有轉移段資料和工程資料。每一步可以暫停等玩家選應對。
-9. **降級應對。** 形狀和事件選項相同：條件、代價、結果。全部用固定規則算，資料檔的 `responses` 和 `flyLunar` 已實作。
-10. **期限。** 有效期限 ＝ 目前期限 − 路線的 `leadWeeks`。D1 和 D6 改的是目前期限。
-11. **預估與實測。** 定版前的預估不含安裝座質量。做過取捨研究後才納入。整合後一律用實測值，並加上事件帶來的質量。
-12. **結算。** 要輸出任務成果、收尾、四種標籤，以及每個風險項目的真相、驗證等級、測試結果和飛行結果。
-13. **文案變數。** 數值都用變數帶入。任務檔案的來源連結放在資料檔的 `sources`。
-14. **共用規則。** 本章用 `risk.ts` 的 `hasDefect`、`verifyDefect`、`defectBelief`、`defectInFlight`、`drawFromPool` 和 `reviewRiskThreshold`。「多一個沒人看過的缺陷來源」用同一個 `hasDefect`，以項目 ID 加 `:exposed` 抽。`codex/risk-rules` 上另有一份登月實作，風險項目和數值與本章不同，合併時要擇一。
-15. **多人提案。** `lunarProposals` 列出四個組別在介面問題上可提的解法。接多人模式時要同步更新 `firestore.rules`。
+開發期先按種子排序事件牌，再依當週狀態選出可觸發的牌。合約、支援時段、載荷與工期由 [`lunar-rules.ts`](../../src/missions/lunar-rules.ts) 保存。飛行端用同一個模擬器判定歷史事件、回應與結局。已提交的飛行選項隨存檔保存，重開後從原決策繼續。事件與風險文案由雙語字典提供，檔案來源見[真實任務事件表](lunar-history.md)。
