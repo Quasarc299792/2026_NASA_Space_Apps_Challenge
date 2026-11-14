@@ -10,6 +10,7 @@ import { claimRole, confirmRoom, createRoom, openRoom, roomIdentity, RoomError, 
 import { activeRoomKey } from '../multiplayer/config'
 import { hasPlayerProposal, proposalFor, roleFor, roles, type Room } from '../multiplayer/model'
 import { ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Heading, money, PowerBreakdown, powerFinding, RemedyPreview } from './shared'
+import { ReportCard } from './ReportCard'
 
 const current = testDesign(reviewDesign)
 const baseWeek = cubeSat.costs.assess.weeks + cubeSat.costs.freeze.weeks + cubeSat.costs.build.weeks + cubeSat.costs.integrate.weeks
@@ -39,8 +40,7 @@ function PlayerProposal({ department, room, t, disabled, onSubmit }: {
   const [draft, setDraft] = useState<MultiplayerRemedy | null>(null)
   const selected = draft ?? previous
   return <section className="proposal-panel">
-    <h2>{t(department)}</h2>
-    <p>{roleBrief(department, t)}</p>
+    <ReportCard speaker={department} t={t}><p>{roleBrief(department, t)}</p></ReportCard>
     <fieldset className="options" disabled={disabled}>
       <legend>{t('teamProposal')}</legend>
       {proposals[department].options.map(remedy => <label className="option" key={remedy}>
@@ -124,7 +124,7 @@ function RolePicker({ room, t, disabled, onClaim }: {
 }) {
   return <section className="proposal-panel">
     <h2>{t('chooseRole')}</h2>
-    <p>{t('chooseRoleDetail')}</p>
+    <ReportCard speaker="review" t={t}><p>{t('chooseRoleDetail')}</p></ReportCard>
     <div className="proposal-list">
       {departments.map(department => <button key={department} className="button secondary row"
         disabled={disabled || Boolean(room.roles[department])} onClick={() => onClaim(department)}>
@@ -225,7 +225,10 @@ export default function Team({ t, back }: { t: Translate; back: () => void }) {
         {room.decision ? <RoomResult room={room} t={t} /> : <>
           {!role && <RolePicker room={room} t={t} disabled={disabled}
             onClaim={department => void perform(() => claimRole(code, department))} />}
-          {role && <p className="warning">{powerFinding(current, t)}</p>}
+          {role === 'pm' && <ReportCard speaker="test" t={t} attention>
+            <p>{powerFinding(current, t)}</p>
+            <p>{t('reportTeamDecision')}</p>
+          </ReportCard>}
           {role === 'pm' && <TeamProposals room={room} t={t} disabled={disabled}
             onConfirm={({ department, remedy }) => void perform(() => confirmRoom(code, department, room.roundId, remedy))} />}
           {role && role !== 'pm' && <>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Radio, Satellite } from 'lucide-react'
+import { Radio, Satellite } from 'lucide-react'
 import { cubeSat as mission } from '../missions/cubesat'
 import {
   affordable, availableWeeks, baselineRemainingCost, canConfigure, currentEvidence, currentWork, forecast, passes, repairOptions,
@@ -10,13 +10,9 @@ import {
   ActionButton, Back, CostLabel, DesignSummary, Disclosure, EvidenceReport, Findings, Heading,
   money, passCount, PowerBreakdown, powerFinding, RemedyPreview, testedBatches,
 } from './shared'
+import { ReportCard } from './ReportCard'
 
 const stages: Stage[] = ['feasibility', 'design', 'build', 'integration', 'review', 'flight']
-const stageDetails = {
-  feasibility: 'feasibilityDetail', design: 'designDetail', build: 'buildDetail',
-  integration: 'integrationDetail', flight: 'flightDetail',
-} as const
-
 type Props = { game: Game; t: Translate; send: (action: Action) => void; back: () => void; restart: () => void }
 
 function Requirements({ t }: { t: Translate }) {
@@ -70,19 +66,32 @@ function Config({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
     send({ type: 'configure', design: { ...design, [key]: value } })
   }
 
+  const feasibility = game.stage === 'feasibility'
   const hardware = <>
-    <Options legend="payload" layout="pair" options={optionList(mission.payloads, option => t(option.description, { ...option, cost: money(option.cost) }))}
-      value={design.payload} choose={value => choose('payload', value)} t={t} />
-    <Options legend="supply" layout="pair" options={optionList(mission.supplies, option => t(option.description, { ...option, cost: money(option.cost) }))}
-      value={design.supply} choose={value => choose('supply', value)} t={t} />
+    <div className="reported-choice">
+      <ReportCard speaker="science" t={t}><p>{t(feasibility ? 'reportPayload' : 'reportPayloadRevision', { count: mission.minimumBatches })}</p></ReportCard>
+      <Options legend="payload" layout="pair" options={optionList(mission.payloads, option => t(option.description, { ...option, cost: money(option.cost) }))}
+        value={design.payload} choose={value => choose('payload', value)} t={t} />
+    </div>
+    <div className="reported-choice">
+      <ReportCard speaker="power" t={t}><p>{t(feasibility ? 'reportSupply' : 'reportSupplyRevision')}</p></ReportCard>
+      <Options legend="supply" layout="pair" options={optionList(mission.supplies, option => t(option.description, { ...option, cost: money(option.cost) }))}
+        value={design.supply} choose={value => choose('supply', value)} t={t} />
+    </div>
   </>
 
   return <div className="decisions">
-    {game.stage === 'feasibility' ? hardware : <>
-      <Options legend="schedule" layout="pair" options={optionList(mission.schedules, option => t(option.description, { count: option.batchLoss }))}
-        value={design.schedule} choose={value => choose('schedule', value)} t={t} />
-      <Options legend="radio" layout="pair" options={optionList(mission.radios, option => t(option.description, { minutes: option.firstTxMinutes, capacity: option.groundCapacity }))}
-        value={design.radio} choose={value => choose('radio', value)} t={t} />
+    {feasibility ? hardware : <>
+      <div className="reported-choice">
+        <ReportCard speaker="comms" t={t}><p>{t('reportSchedule')}</p></ReportCard>
+        <Options legend="schedule" layout="pair" options={optionList(mission.schedules, option => t(option.description, { count: option.batchLoss }))}
+          value={design.schedule} choose={value => choose('schedule', value)} t={t} />
+      </div>
+      <div className="reported-choice">
+        <ReportCard speaker="comms" t={t}><p>{t('reportRadio', { minutes: mission.ditl.minQuietMinutes })}</p></ReportCard>
+        <Options legend="radio" layout="pair" options={optionList(mission.radios, option => t(option.description, { minutes: option.firstTxMinutes, capacity: option.groundCapacity }))}
+          value={design.radio} choose={value => choose('radio', value)} t={t} />
+      </div>
       <Disclosure label={t('hardwareChoices')}><div className="decisions">{hardware}</div></Disclosure>
     </>}
     {(!result.powerPass || (game.stage === 'design' && (!result.ditlPass || !result.dataPass))) && <div className="warning" aria-live="polite">
@@ -122,6 +131,7 @@ function Flight({ game, t, send }: Pick<Props, 'game' | 't' | 'send'>) {
   const evidence = currentEvidence(game)
   if (!evidence) return null
   return <>
+    <ReportCard speaker="ground" t={t}><p>{t('reportFlight')}</p></ReportCard>
     <div className="flight-visual" aria-hidden><Satellite size={34} strokeWidth={1.2} /><i /><Radio size={26} strokeWidth={1.2} /></div>
     <Options legend="ground" value={choice} choose={setChoice} t={t} options={[
       { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: mission.minimumBatches }) },
@@ -244,18 +254,23 @@ export function Single(props: Props) {
 
   return <article className="manual">
     <Back t={t} onClick={back} />
-    <Heading eyebrow={t('cubesat')} title={t(game.returned ? 'returned' : stage)}>
-      {!game.returned && stage !== 'review' && t(stage === 'integration' && game.evidence ? 'reviewRetest' : stageDetails[stage])}
-    </Heading>
+    <Heading eyebrow={t('cubesat')} title={t(game.returned ? 'returned' : stage)} />
     <dl className="resource-line">
       <div><dt>{t('flightWindow')}</dt><dd>{t('weeks', { count: availableWeeks(game) })}</dd></div>
       <div><dt>{t('budgetLabel')}</dt><dd>{money(game.credits)}</dd></div>
     </dl>
-    <section className="next-decision" key={`${stage}:${game.returned}`}>
+    <section className="next-decision decision-arrival" key={`${stage}:${game.returned}`}>
+      {stage === 'build' && <ReportCard speaker="assembly" t={t}><p>{t('reportBuild')}</p></ReportCard>}
+      {stage === 'integration' && <ReportCard speaker="test" t={t}>
+        <p>{t(game.evidence ? 'reviewRetest' : 'reportIntegration')}</p>
+      </ReportCard>}
       {stage === 'review' && checks && (passes(checks)
-        ? <p className="verified"><Check size={18} aria-hidden />{t('reviewReady')}</p>
+        ? <ReportCard speaker="review" t={t}><p>{t('reviewReady')}</p></ReportCard>
         : <div>
-          <div className="warning"><Findings evidence={checks} t={t} /></div>
+          <ReportCard speaker="review" t={t} attention>
+            <Findings evidence={checks} t={t} />
+            {game.returned && <p>{t('reportReviewBlocked')}</p>}
+          </ReportCard>
           {!checks.powerPass && <Disclosure label={t('powerBreakdown')}>
             <PowerBreakdown design={checks.design} result={checks} t={t} />
           </Disclosure>}

@@ -15,6 +15,10 @@ async function integrate(page: Page) {
 
 test('baseline mission keeps evidence collapsed and delivers the required data', async ({ page }) => {
   await start(page)
+  const payloadChoice = page.locator('.reported-choice').filter({ hasText: 'First, pick the camera' })
+  await expect(payloadChoice.locator('.report-speaker')).toHaveText('Science')
+  await expect(payloadChoice.getByRole('radio', { name: /Baseline imager/ })).toBeVisible()
+  await expect(page.locator('.reported-choice').filter({ hasText: 'Next, pick a power supply' }).locator('.report-speaker')).toHaveText('Power')
   await expect(page.getByRole('radio', { name: /Early radio profile/ })).toBeHidden()
   await expect(page.getByRole('radio', { name: /Baseline imager.*\$140,000/ })).toBeChecked()
   await integrate(page)
@@ -27,6 +31,8 @@ test('baseline mission keeps evidence collapsed and delivers the required data',
   await expect(page.getByRole('link', { name: /CubeSat 101/ })).toHaveAttribute('href', /page=68/)
   await page.getByRole('button', { name: 'Submit for flight review' }).click()
   await expect(rule).toBeHidden()
+  await expect(page.locator('.report-speaker')).toHaveText('Ground station')
+  await expect(page.getByRole('radio', { name: /Send required observations/ })).toBeChecked()
   await page.getByRole('button', { name: 'Run first ground pass' }).click()
   await expect(page.getByRole('heading', { name: 'Mission delivered' })).toBeVisible()
   await expect(page.getByText('2 usable batches received')).toBeVisible()
@@ -53,7 +59,7 @@ test('a returned review leads with the conflict and lets the player recover afte
   await expect(page.getByText('重測另需 1 週和 $80,000。')).toBeVisible()
   await page.getByRole('radio', { name: /錯開操作排程.*\$60,000/ }).check()
   await page.getByRole('button', { name: '執行選取的修正' }).click()
-  await expect(page.getByText('配置已變更，請用目前版本重測後再送審。')).toBeVisible()
+  await expect(page.getByText('修正完成了。我們先用目前的配置重測，再送回飛行審查。')).toBeVisible()
   await page.getByRole('button', { name: /重新執行整合測試/ }).click()
   await expect(page.getByText('0 週', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '送交飛行審查' }).click()

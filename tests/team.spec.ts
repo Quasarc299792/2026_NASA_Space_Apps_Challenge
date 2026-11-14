@@ -33,7 +33,7 @@ test.describe('Firebase emulator', () => {
       await expect(pm.getByRole('button', { name: 'Confirm and retest' })).toBeDisabled()
       await join(guest, code)
       await guest.getByRole('button', { name: 'Science Open' }).click()
-      await expect(guest.getByRole('heading', { name: 'Science' })).toBeVisible()
+      await expect(guest.locator('.proposal-panel .report-speaker').filter({ hasText: /^Science$/ })).toBeVisible()
       await expect(guest.getByRole('button', { name: 'Confirm and retest' })).toHaveCount(0)
       await guest.getByRole('radio', { name: /Stagger operations/ }).check()
       await guest.getByRole('button', { name: 'Send proposal' }).click()
@@ -53,7 +53,7 @@ test.describe('Firebase emulator', () => {
 
       await guest.getByRole('button', { name: '繁中' }).click()
       await guest.reload()
-      await expect(guest.getByRole('heading', { name: '科學組' })).toBeVisible()
+      await expect(guest.locator('.proposal-panel .report-speaker').filter({ hasText: /^科學組$/ })).toBeVisible()
       await expect(guest.getByRole('radio', { name: /換成基本成像儀/ })).toBeChecked()
       await expect(pm.getByRole('radio', { name: /Power.*Game proposal.*Upgrade power supply/ })).toBeVisible()
       await pm.getByRole('radio', { name: /Science.*Player proposal.*Switch to baseline imager/ }).check()
@@ -105,7 +105,7 @@ test('a four-player room stores only the winning decision during concurrent conf
       const guest = page as Page
       await join(guest, code)
       await guest.getByRole('button', { name: `${label} Open` }).click()
-      await expect(guest.getByRole('heading', { name: label as string })).toBeVisible()
+      await expect(guest.locator('.proposal-panel .report-speaker').filter({ hasText: label as string })).toBeVisible()
     }))
 
     await science.getByRole('radio', { name: /Switch to baseline imager/ }).check()
