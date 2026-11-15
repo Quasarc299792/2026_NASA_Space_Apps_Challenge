@@ -32,4 +32,6 @@
 
 [繁中玩家指南](story-explainer.zh-TW.md) · [English player guide](story-explainer.en.md)
 
+[繁中完整劇本](full-script.zh-TW.md) · [Full campaign script in English](full-script.en.md)
+
 [中英文文案鍵](../development.md#故事與文案交接)取當局數值。事故回顧中的航電警告是序章的固定劇情，入軌局測到的地面資料鏈缺陷是當局事件，兩者都不提供舊事故的確定成因。
