@@ -509,3 +509,10 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
 .phase-table tbody th { font-weight: 680; min-width: 9em; }
 .phase-table tr[aria-current="step"] th, .phase-table tr[aria-current="step"] td { color: var(--accent); background: var(--accent-soft); }
 .phase-table small { display: block; }
+
+.lore-script p { margin: 0.4rem 0; }
+.lore-screen { font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.04em; }
+.lore-facts { padding-left: 1.2rem; }
+.lore-facts li { margin: 0.4rem 0; }
+.lore-facts small { display: inline-block; margin-left: 0.25rem; }
+.lore-flow li { margin: 0.6rem 0; }

@@ -99,7 +99,7 @@ test('three chapters carry earned records, resume paid work, and replay the luna
   await button('View mission brief').click()
   await expect(heading('First Light')).toBeVisible()
   await summary('Prologue · The lost signal').click()
-  await expect(page.getByText(/Investigators never established the cause/)).toBeVisible()
+  await expect(page.getByText(/Which part failed was never known/)).toBeVisible()
   await start()
   await radio(/Add an auxiliary sensor/).check()
   await work(/Complete feasibility/)

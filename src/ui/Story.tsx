@@ -4,6 +4,7 @@ import type { Message, Translate } from '../i18n'
 import { commissionMission, missionCatalog, missions } from '../missions'
 import { commissions } from '../missions/cubesat-commission'
 import { DesignSummary, Disclosure, missionMoney } from './shared'
+import { ChapterCard, ChapterRecap, Prologue } from './Lore'
 
 const chapters = {
   cubesat: { title: 'storyFirstLight', opening: 'storyFirstOffer', complete: 'storyFirstComplete', short: 'storyFirstShort' },
@@ -24,14 +25,14 @@ export function StoryBrief({ missionId, t }: { missionId: string; t: Translate }
     {first && <>
       <p>{t('storyPast')}</p>
       <Disclosure label={t('storyPrologue')}>
-        <p>{t('storyBeforeLaunch')}</p>
-        <p>{t('storyAfterLaunch')}</p>
+        <Prologue t={t} />
       </Disclosure>
       <p><strong>Alex</strong> · {t('storyAlexFirst')}</p>
     </>}
     <p><strong>{first || missionId === 'lunar-mission' ? 'Samuel' : 'Alex'}</strong> · {t(chapter.opening)}</p>
     {first && <p><strong>Elena</strong> · {t('storyElenaFirst')}</p>}
     {missionId === 'orbital-launch' && <p><strong>Elena</strong> · {t('storyOrbitalArchive')}</p>}
+    <ChapterCard missionId={missionId} t={t} />
   </section>
 }
 
@@ -44,6 +45,7 @@ export function StoryDebrief({ game, t }: { game: Game; t: Translate }) {
     <h2>{t(lunar ? 'storyEpilogue' : 'storyDebrief')}</h2>
     <p><strong>{game.flight?.delivered ? 'Samuel' : 'Elena'}</strong> · {t(result)}</p>
     {lunar && <p><strong>Alex</strong> · {t(game.flight?.delivered ? 'storyNewProposal' : 'storyReturnToLab')}</p>}
+    <ChapterRecap missionId={game.missionId} t={t} />
   </section>
 }
 

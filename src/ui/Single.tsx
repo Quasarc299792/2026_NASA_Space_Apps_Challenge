@@ -19,6 +19,7 @@ import { ReportCard } from './ReportCard'
 import { phaseGate, phaseOf, phases, phaseSource, type Phase } from '../game/phase'
 import { Lab } from './Lab'
 import { Portfolio, StoryBrief, StoryDebrief } from './Story'
+import { MissionFlow } from './Lore'
 
 type Props = { game: Game; mission: MissionModule; progress: Progress; t: Translate; send: (action: Action) => void; back: () => void; replay: (sameSeed: boolean, goal?: ScienceGoal) => void; open: (missionId: string) => void }
 type Controls = Pick<Props, 'game' | 'mission' | 't' | 'send'>
@@ -56,6 +57,7 @@ export function Brief({ mission, t, begin, back, saved }: {
       </ol>
       <PhaseTable t={t} />
     </Disclosure>}
+    {isCubeSat && <MissionFlow t={t} />}
     <Disclosure label={t('glossaryTitle')}><Glossary t={t} /></Disclosure>
     {!isCubeSat && <Disclosure label={t('missionStory')}><blockquote>{t(mission.dialogue)}</blockquote></Disclosure>}
   </article>
@@ -87,7 +89,8 @@ export function PhaseTable({ t, current }: { t: Translate; current?: Phase }) {
 }
 
 const glossary = ['glossaryBatch', 'glossaryWatt', 'glossaryMargin', 'glossaryHeritage', 'glossaryReviews', 'glossaryVerification',
-  'glossaryDitl', 'glossaryWindow', 'glossaryCredits'] as const
+  'glossaryDitl', 'glossaryWindow', 'glossaryCredits', 'glossaryPayload', 'glossaryPass', 'glossaryInclination', 'glossarySso',
+  'glossaryUpperStage', 'glossaryHotFire', 'glossaryRedundancy', 'glossaryRisk'] as const
 
 // Short definitions for the terms the workbench uses without explaining.
 function Glossary({ t }: { t: Translate }) {
