@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { FastForward } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { ChevronDown, FastForward } from 'lucide-react'
 import { contactEvidence, currentEvidence, type Action } from '../game/mission'
 import type { Message, Translate } from '../i18n'
 import { benchSequence, cubeSat, departments, forecast, planContact, powerTimeline, scopeSegment, type CubeSatEvidence, type CubeSatGame, type Department } from '../missions/cubesat'
@@ -16,8 +16,12 @@ const segments = {
 
 const assemblyLabels = { science: 'labCalibrate', power: 'labConnect', comms: 'labBoot' } as const
 
-export function Lab({ game, send, t }: { game: CubeSatGame; send: (action: Action) => void; t: Translate }) {
+export function Lab({ game, send, t, compact = false }: {
+  game: CubeSatGame; send: (action: Action) => void; t: Translate; compact?: boolean
+}) {
   const [department, inspect] = useState<Department | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const detailsId = useId()
   const canvas = useRef<HTMLCanvasElement>(null)
   const { playback, design, stage, contact } = game
   const orbit = stage === 'flight'
@@ -111,47 +115,53 @@ export function Lab({ game, send, t }: { game: CubeSatGame; send: (action: Actio
     return t(ready ? 'labBenchVerified' : 'labBenchQueued', { config })
   }
 
-  return <section className={`lab ${orbit ? 'lab-orbit' : ''} ${warning ? 'lab-warning' : ''}`} aria-label={t(orbit ? 'labOrbit' : 'labTitle')}>
-    <div className="lab-head">
+  return <section className={`lab ${orbit ? 'lab-orbit' : ''} ${warning ? 'lab-warning' : ''} ${compact ? 'lab-compact' : ''}`}
+    aria-label={t(orbit ? 'labOrbit' : 'labTitle')}>
+    {compact ? <button type="button" className="lab-preview-toggle" aria-expanded={expanded} aria-controls={detailsId}
+      onClick={() => setExpanded(!expanded)}>
+      {t(orbit ? 'labOrbit' : 'labTitle')}<ChevronDown size={16} aria-hidden />
+    </button> : <div className="lab-head">
       <h2>{t(orbit ? 'labOrbit' : 'labTitle')}</h2>
       {playback && <button className="lab-skip" onClick={() => send({ type: 'advanceLab', playback, skip: true })}>
         <FastForward size={16} aria-hidden />{t('labSkip')}
       </button>}
-    </div>
+    </div>}
     <div className="lab-scene">
       <canvas className="lab-art" ref={canvas} width={320} height={140} aria-hidden />
       {tracked && <span className="lab-focus">{t(playback ? 'labScope' : 'labScopeSaved')}</span>}
     </div>
-    <div className="lab-readout" role="status">
-      <span>{title}</span>
-      {readout && <strong>{readout}</strong>}
+    <div id={detailsId} className="lab-details" hidden={compact && !expanded}>
+      <div className="lab-readout" role="status">
+        <span>{title}</span>
+        {readout && <strong>{readout}</strong>}
+      </div>
+      {contact && <p className="lab-note">{t('groundTally', { accepted: contact.accepted, archived: contact.next - contact.accepted })}</p>}
+      {segment && <ol className="lab-timeline" aria-label={t('labTimeline')}>
+        {timeline.map((item, index) => <li key={item.id} className={item.watts > available ? 'over-limit' : undefined}
+          aria-current={item.id === segment.id ? 'step' : undefined}>
+          <span>{t(segments[item.id].title)}</span>
+          <small>{playback && index > playback.step ? t('labSegmentPending') : `${item.watts} W`}</small>
+        </li>)}
+      </ol>}
+      {!orbit && <div className="lab-crew">
+        {departments.map(team => <button key={team} type="button" aria-pressed={department === team}
+          aria-description={active.includes(team) ? t('labActive', { team: t(team) }) : undefined}
+          onClick={() => inspect(department === team ? null : team)}>
+          <span className={active.includes(team) ? 'crew-light active' : 'crew-light'} aria-hidden />{t(team)}
+        </button>)}
+      </div>}
+      {!orbit && department && <p className="lab-note" role="status">{teamNote(department)}</p>}
+      {stage === 'integration' && !playback && game.benchLead && !game.evidence && <p className="lab-note">
+        {t(game.benchLead === 'science' ? 'labBenchScienceResult' : 'labBenchPowerResult', {
+          camera: configuration.science, watts: cubeSat.payloads[design.payload].watts, available,
+        })}
+      </p>}
+      {stage === 'review' && !playback && evidence?.powerPass && evidence.design.schedule === 'stagger' &&
+        <p className="lab-note">{t('labStaggerResult', {
+          loss: cubeSat.schedules.stagger.batchLoss,
+          batches: evidence.batches,
+          deliveryLoss: forecast({ ...design, schedule: 'overlap' }).batches - evidence.batches,
+        })}</p>}
     </div>
-    {contact && <p className="lab-note">{t('groundTally', { accepted: contact.accepted, archived: contact.next - contact.accepted })}</p>}
-    {segment && <ol className="lab-timeline" aria-label={t('labTimeline')}>
-      {timeline.map((item, index) => <li key={item.id} className={item.watts > available ? 'over-limit' : undefined}
-        aria-current={item.id === segment.id ? 'step' : undefined}>
-        <span>{t(segments[item.id].title)}</span>
-        <small>{playback && index > playback.step ? t('labSegmentPending') : `${item.watts} W`}</small>
-      </li>)}
-    </ol>}
-    {!orbit && <div className="lab-crew">
-      {departments.map(team => <button key={team} type="button" aria-pressed={department === team}
-        aria-description={active.includes(team) ? t('labActive', { team: t(team) }) : undefined}
-        onClick={() => inspect(department === team ? null : team)}>
-        <span className={active.includes(team) ? 'crew-light active' : 'crew-light'} aria-hidden />{t(team)}
-      </button>)}
-    </div>}
-    {!orbit && department && <p className="lab-note" role="status">{teamNote(department)}</p>}
-    {stage === 'integration' && !playback && game.benchLead && !game.evidence && <p className="lab-note">
-      {t(game.benchLead === 'science' ? 'labBenchScienceResult' : 'labBenchPowerResult', {
-        camera: configuration.science, watts: cubeSat.payloads[design.payload].watts, available,
-      })}
-    </p>}
-    {stage === 'review' && !playback && evidence?.powerPass && evidence.design.schedule === 'stagger' &&
-      <p className="lab-note">{t('labStaggerResult', {
-        loss: cubeSat.schedules.stagger.batchLoss,
-        batches: evidence.batches,
-        deliveryLoss: forecast({ ...design, schedule: 'overlap' }).batches - evidence.batches,
-      })}</p>}
   </section>
 }

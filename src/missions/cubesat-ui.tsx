@@ -1,8 +1,9 @@
 import { Check, CircleAlert } from 'lucide-react'
+import { contactEvidence, currentEvidence, passes, type Copy, type Game } from '../game/mission'
 import type { Translate } from '../i18n'
 import type { MissionUi } from '.'
-import { Disclosure } from '../ui/shared'
-import { applyRemedy, cubeSat, planContact, testDesign, type CubeSatDesign, type CubeSatEvidence, type Remedy } from './cubesat'
+import { Disclosure, money } from '../ui/shared'
+import { applyRemedy, cubeSat, cubeSatRiskIds, forecast, planContact, repairOptions, remedies, testDesign, type CubeSatDesign, type CubeSatEvidence, type CubeSatRisk, type Remedy } from './cubesat'
 
 type TestResult = ReturnType<typeof testDesign>
 type PowerValues = Pick<TestResult, 'payloadWatts' | 'peak' | 'available'>
@@ -36,6 +37,7 @@ export function testedBatches(evidence: TestResult) {
 export function Findings({ evidence, t }: { evidence: TestResult; t: Translate }) {
   return <ul className="findings">
     {!evidence.powerPass && <li>{powerFinding(evidence, t)}</li>}
+    {evidence.massPass === false && <li>{t('massFinding', { mass: evidence.mass, limit: evidence.massLimit })}</li>}
     {!evidence.ditlPass && <li>{t('earlyTransmission', evidence.ditl)}</li>}
     {evidence.powerPass && !evidence.dataPass && <li>{t('dataShortfall', { count: testedBatches(evidence), minimum: cubeSat.minimumBatches })}</li>}
   </ul>
@@ -47,6 +49,10 @@ function Report({ evidence, t }: { evidence: TestResult; t: Translate }) {
     <Disclosure label={t('powerCheck')} value={<Status pass={evidence.powerPass} t={t} />}>
       <PowerBreakdown design={evidence.design} result={evidence} t={t} />
     </Disclosure>
+    {evidence.massPass !== undefined && <div className="check row">
+      <span>{t('massCheck')}<small>{t('massUse', { mass: evidence.mass, limit: evidence.massLimit })}</small></span>
+      <Status pass={evidence.massPass} t={t} />
+    </div>}
     <div className="check row">
       <span>{t('dataCheck')}<small>{t('dataThreshold', { count: testedBatches(evidence), minimum: cubeSat.minimumBatches })}</small></span>
       <Status pass={evidence.dataPass} t={t} />
@@ -65,20 +71,142 @@ function Report({ evidence, t }: { evidence: TestResult; t: Translate }) {
 
 export function RemedyPreview({ design, remedy, t }: { design: CubeSatDesign; remedy: Remedy; t: Translate }) {
   const result = testDesign(applyRemedy(design, remedy))
-  return <small>{remedy === 'compliant'
-    ? `${t('firstTx')} ${t('timestamp', { count: result.ditl.firstTx })}`
-    : `${t('powerUse', { peak: result.peak, available: result.available })} · ${t('dataBatches', { count: result.batches })}`}</small>
+  return <>
+    <small>{t('massUse', { mass: result.mass, limit: result.massLimit })} · {t('powerUse', { peak: result.peak, available: result.available })} · {t('firstTx')} {t('timestamp', { count: result.ditl.firstTx })}</small>
+    <small>{passes(result) ? t('planOptionDelivery', { count: result.batches })
+      : t('repairStillBlocked', { options: repairOptions(result.design).map(id => t(cubeSat.costs[id].label)).join(t('listSeparator')) })}</small>
+  </>
+}
+
+export function verificationEntry(game: Game, risk: CubeSatRisk) {
+  const { option, steps } = cubeSat.risks[risk]
+  const entries = game.log.filter(entry => entry.design[option] === game.design[option])
+  return entries.filter(entry => steps.some(step => step === entry.id)).at(-1)
+    ?? entries.filter(entry => ['analysisClear', 'analysisConflict'].includes(entry.id)).at(-1)
+}
+
+function decisionLessons(game: Game, t: Translate): Copy[] {
+  const lessons: Copy[] = []
+  const { flight, log } = game
+  const evidence = currentEvidence(game) as CubeSatEvidence | null
+  const inOrbit = flight ? contactEvidence(game) as CubeSatEvidence | null : null
+
+  if (flight && evidence && inOrbit) {
+    const all = planContact(inOrbit, 'extra').batches
+    const chosen = planContact(inOrbit, flight.choice).batches
+    if (flight.diagnostics || flight.archived || all > chosen) {
+      lessons.push({ message: 'lessonContact', values: {
+        all, chosen, slots: flight.diagnostics, archived: flight.archived, count: flight.batches,
+      } })
+    }
+    const failures = game.outcomes.filter(outcome => outcome.failed)
+    if (failures.length) {
+      lessons.push({ message: all < testedBatches(evidence) ? 'lessonOrbit' : 'lessonOrbitMargin', values: {
+        items: failures.map(outcome => t(cubeSat.risks[outcome.id as CubeSatRisk].label)).join(t('listSeparator')),
+        tested: testedBatches(evidence), capacity: all,
+      } })
+    }
+  }
+  for (const risk of cubeSatRiskIds) {
+    const { option, fix, label } = cubeSat.risks[risk]
+    if (!game.risks[risk]?.fixed) continue
+    const repair = log.filter(entry => entry.id === fix && entry.design[option] === game.design[option]).at(-1)
+    const verification = verificationEntry(game, risk)
+    if (repair && verification) {
+      lessons.push({ message: 'lessonFixed', values: {
+        test: t(cubeSat.costs[verification.id as keyof typeof cubeSat.costs]?.label ?? 'analyze'),
+        item: t(label), fix: t(cubeSat.costs[fix].label), weeks: cubeSat.costs[fix].weeks,
+        cost: money(verification.cost + repair.cost),
+      } })
+    }
+  }
+  const entry = log.filter(row => remedies.some(remedy => remedy === row.id)).at(-1)
+  if (entry) {
+    const correction = log.lastIndexOf(entry)
+    const remedy = entry.id as Remedy
+    const retest = log.slice(correction + 1).find(row => row.id === 'integrate')
+    const before = log.slice(0, correction).filter(row => row.id === 'integrate').at(-1)?.report as CubeSatEvidence | undefined
+    if (before && retest?.report) {
+      const after = retest.report as CubeSatEvidence
+      const values = { weeks: cubeSat.costs[remedy].weeks + cubeSat.costs.integrate.weeks,
+        cost: money(entry.cost + retest.cost), from: before.peak, peak: after.peak, available: after.available,
+        collected: after.collectedBatches ?? forecast(after.design).collectedBatches, count: testedBatches(after),
+        beforeCollected: forecast(before.design).collectedBatches, beforeCapacity: before.batches,
+        txBefore: before.ditl.elapsed, txAfter: after.ditl.elapsed, threshold: after.ditl.threshold,
+        remedy: t(cubeSat.costs[remedy].label), result: t(passes(after) ? 'pass' : 'fail'),
+      }
+      lessons.push({ message: remedy === 'stagger' ? 'lessonStaggered' : remedy === 'compliant' ? 'lessonRadio' : 'lessonRepair', values })
+    }
+  }
+  if (evidence && passes(evidence) && log.some(entry => entry.id === 'freeze')) {
+    const design = evidence.design as CubeSatDesign
+    const iss = cubeSat.launches.iss
+    const rideshare = cubeSat.launches.rideshare
+    const issMass = forecast({ ...design, launch: 'iss' })
+    if (design.launch === 'rideshare' && !issMass.massPass) {
+      lessons.push({ message: 'lessonLaunch', values: {
+        cost: money(rideshare.cost - iss.cost), weeks: rideshare.leadWeeks - iss.leadWeeks, mass: issMass.mass, limit: iss.massLimitKg,
+      } })
+    } else if (design.launch === 'iss') {
+      lessons.push({ message: 'lessonLaunchSaved', values: { cost: money(rideshare.cost - iss.cost), mass: issMass.mass, limit: iss.massLimitKg } })
+    }
+  }
+  if (!entry && evidence && passes(evidence) && log.some(entry => entry.id === 'freeze')) {
+    const design = evidence.design
+    const standard = forecast({ ...design, supply: 'standard' })
+    if (design.supply === 'reinforced' && standard.deficit) {
+      lessons.push({ message: 'lessonPower', values: {
+        cost: money(cubeSat.supplies.reinforced.cost - cubeSat.supplies.standard.cost),
+        peak: evidence.peak, available: evidence.available, previous: standard.available, count: testedBatches(evidence),
+      } })
+    } else if (design.schedule === 'stagger') {
+      const overlap = forecast({ ...design, schedule: 'overlap' })
+      lessons.push({ message: 'lessonPlannedStagger', values: {
+        from: overlap.peak, peak: evidence.peak, beforeCollected: overlap.collectedBatches,
+        collected: forecast(design).collectedBatches, count: testedBatches(evidence),
+      } })
+    } else if (design.payload === 'basic') {
+      lessons.push({ message: 'lessonBasic', values: {
+        cost: money(cubeSat.payloads.advanced.cost - cubeSat.payloads.basic.cost),
+        peak: evidence.peak, available: evidence.available, count: testedBatches(evidence),
+      } })
+    }
+  }
+  const launch = lessons.filter(lesson => lesson.message === 'lessonLaunch' || lesson.message === 'lessonLaunchSaved')
+  return [...lessons.filter(lesson => !launch.includes(lesson)), ...launch].slice(0, 2)
+}
+
+export function CubeSatDebrief({ game, goal, t }: { game: Game; goal: number; t: Translate }) {
+  const { flight } = game
+  const count = flight?.batches ?? 0
+  const result = currentEvidence(game) as CubeSatEvidence | null
+  const lessons = decisionLessons(game, t)
+  return <section className="plan-preview debrief" aria-labelledby="lesson">
+    <h2 id="lesson">{t('missionLesson')}</h2>
+    <p>{game.gate === 'FRR' ? t('cubeSatFlightApproved', { week: game.week }) : t('gates', { gate: game.gate })}</p>
+    <p className={flight?.delivered ? 'good' : 'bad'}>{t(flight?.delivered ? 'contractMet' : 'contractMissed', { minimum: cubeSat.minimumBatches, count })}</p>
+    {goal !== cubeSat.minimumBatches && <p className={count >= goal ? 'good' : 'bad'}>
+      {t(count >= goal ? 'goalMet' : 'goalMissed', { count, goal })}
+    </p>}
+    {result && !passes(result) && <Findings evidence={result} t={t} />}
+    {lessons.length > 0 && <ul className="decision-lessons">
+      {lessons.map((lesson, index) => <li key={index}>{t(lesson.message, lesson.values)}</li>)}
+    </ul>}
+  </section>
 }
 
 function Requirements({ t }: { t: Translate }) {
   return <ul className="requirements">
     <li>{t('briefMinimum', { count: cubeSat.minimumBatches, orbits: cubeSat.missionOrbits })}</li>
+    <li>{t('briefLaunch', { iss: cubeSat.launches.iss.massLimitKg, rideshare: cubeSat.launches.rideshare.massLimitKg })}</li>
     <li>{t('briefExtra', { count: cubeSat.stretchBatches })}</li>
     <li>{t('briefIcd', { count: cubeSat.ditl.minQuietMinutes })}</li>
   </ul>
 }
 
 export const cubeSatUi: MissionUi = {
+  sources: cubeSat.sources,
+  verificationWork: new Set([...Object.values(cubeSat.risks).flatMap(risk => risk.steps), 'analysisClear', 'analysisConflict']),
   Requirements,
   Estimate: ({ design, t }) => <PowerBreakdown design={design as CubeSatDesign} t={t} />,
   Forecast: ({ design, forecast, t }) => <PowerBreakdown design={design as CubeSatDesign} result={forecast as PowerValues} t={t} />,
@@ -90,11 +218,12 @@ export const cubeSatUi: MissionUi = {
     {Boolean(flight.archived) && <p>{t('groundArchivedResult', { count: flight.archived })}</p>}
   </>,
   flightOptions: (evidence, t) => {
+    const priority = planContact(evidence as CubeSatEvidence, 'priority')
     const extra = planContact(evidence as CubeSatEvidence, 'extra')
     const diagnostics = planContact(evidence as CubeSatEvidence, 'diagnostics')
     return [
-      { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: cubeSat.minimumBatches }) },
-      { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: extra.batches }) },
+      { id: 'priority', name: 'flightPriority', detail: t('flightPriorityDetail', { count: priority.batches, slots: priority.diagnostics }) },
+      { id: 'extra', name: 'flightExtra', detail: t('flightExtraDetail', { count: extra.batches, slots: extra.diagnostics }) },
       { id: 'diagnostics', name: 'flightDiagnostics', detail: t('flightContactDiagnostics', { slots: diagnostics.diagnostics, count: diagnostics.batches }) },
     ]
   },

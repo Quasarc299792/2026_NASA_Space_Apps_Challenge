@@ -66,7 +66,7 @@ test('seed 6, tests that only confirm: the recommended verification passes and t
   assert.deepEqual(belief(game), { imaging: 20, power: 20 })
   assert.deepEqual(riskOdds(game), { minimum: 0.6400000000000001, noFatal: 1 })
   game = send(game, verify('imaging'))
-  assert.deepEqual([game.week, game.credits, game.risks.imaging, belief(game).imaging], [0, 96, { level: 1, found: false, fixed: false }, 11])
+  assert.deepEqual([game.week, game.credits, game.risks.imaging, belief(game).imaging], [0, 106, { level: 1, found: false, fixed: false }, 11])
   game = verifyAndFix(game, ['imaging', 'power', 'power', 'power'])
   assert.deepEqual(belief(game), { imaging: 4, power: 1 })
   assert.deepEqual(game.log.map(entry => entry.id), ['imagingAnalysis', 'imagingBench', 'powerAnalysis', 'powerLoadTest', 'powerRehearsal'])
@@ -84,7 +84,7 @@ test('seed 13, bad news: analysis finds a charging defect, and the player fixes 
   assert.deepEqual([game.risks.power, belief(game).power], [{ level: 1, found: true, fixed: false }, 100])
   assert.equal(send(game, verify('power')), game, 'nothing left to learn about a defect that has been found')
   const fixed = send(game, fix('power'))
-  assert.deepEqual([fixed.week, fixed.credits, fixed.risks.power, belief(fixed).power], [1, 91, { level: 1, found: true, fixed: true }, 0])
+  assert.deepEqual([fixed.week, fixed.credits, fixed.risks.power, belief(fixed).power], [1, 101, { level: 1, found: true, fixed: true }, 0])
   assert.deepEqual(summary(fly(work(fixed, 4))), {
     week: 5, credits: 36, stage: 'results', stop: null, batches: 2, delivered: true, accepted: ['imaging'], flew: ['imaging 20% held', 'power 0% held'],
   })
@@ -113,7 +113,7 @@ test('seeds 21 and 44, tests can miss: a pass lowers the believed risk and leave
 
 test('the optional power and timing analysis also runs the analysis level of both items', () => {
   const clean = send(newGame('cubesat', [], 6), { type: 'analyze' })
-  assert.deepEqual([clean.week, clean.credits, clean.risks], [1, 95, { imaging: { level: 1, found: false, fixed: false }, power: { level: 1, found: false, fixed: false } }])
+  assert.deepEqual([clean.week, clean.credits, clean.risks], [1, 105, { imaging: { level: 1, found: false, fixed: false }, power: { level: 1, found: false, fixed: false } }])
   const found = send(newGame('cubesat', [], 13), { type: 'analyze' })
   assert.deepEqual(found.risks.power, { level: 1, found: true, fixed: false })
 })

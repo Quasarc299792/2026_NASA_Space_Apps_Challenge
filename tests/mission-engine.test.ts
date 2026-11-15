@@ -87,7 +87,7 @@ test('paid multiweek work pauses and resumes from v2, then custom FRR approves a
   assert.deepEqual(game.log.at(-1)?.review?.waivers, [])
   game = task(game, 'verify')
   const unwaived = runMission(game, { type: 'review' })
-  assert.equal(unwaived.returned, true)
+  assert.equal(unwaived.returned, false)
   const approved = reload(runMission(unwaived, waive))
   assert.equal(approved.stage, 'flight')
   assert.equal(approved.returned, false)

@@ -37,8 +37,13 @@ export function riskIssue(id: string, label: Message, risk: number, severity: Se
   } } }
 }
 
-export function verificationCopy(state: DefectState, found: Message = 'riskTestFound'): Copy {
-  return state.found ? { message: found } : { message: 'riskTestPassed', values: { percent: percent(1 - detection[state.level]) } }
+// What a verification step told the player, named after the item it looked at.
+export function verificationCopy(state: DefectState, found: Message = 'riskTestFound', item?: { label: Message; before: number; after: number }): Copy {
+  if (state.found) return { message: found }
+  const percentMissed = percent(1 - detection[state.level])
+  return item
+    ? { message: 'riskTestPassedItem', values: { percent: percentMissed, before: percent(item.before), after: percent(item.after) }, labels: { item: item.label } }
+    : { message: 'riskTestPassed', values: { percent: percentMissed } }
 }
 
 export function nextDefectCopy(state: DefectState, maturity: Maturity, work?: CostItem) {

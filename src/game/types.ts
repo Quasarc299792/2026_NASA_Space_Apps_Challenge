@@ -1,20 +1,23 @@
+import type { CommissionId } from '../missions/cubesat-commission'
 import type { Message } from '../i18n/en'
 import type { DefectState, Maturity, Outcome, Severity } from './risk'
 
 export type Design = Record<string, string>
 export type Cost = { weeks: number; credits: number }
 export type CostItem = Cost & { label: Message }
-export type Copy = { message: Message; values?: Record<string, string | number> }
+// labels are message keys translated before they fill the matching {name} in message.
+export type Copy = { message: Message; values?: Record<string, string | number>; labels?: Record<string, Message> }
 type Json = null | boolean | number | string | Json[] | JsonObject
 export type JsonObject = { [key: string]: Json }
 export type Work = 'assess' | 'freeze' | 'build' | 'integrate'
 export type Stage = 'feasibility' | 'design' | 'build' | 'integration' | 'review' | 'flight' | 'results'
 export type Gate = 'MDR' | 'PDR' | 'CDR' | 'FRR'
-export type Stop = 'deadline' | 'funds' | 'cancelled'
+export type Stop = 'deadline' | 'funds' | 'cancelled' | 'margin'
 export type LabPlayback = { kind: 'assembly' | 'integration'; step: number }
 export type BenchLead = 'science' | 'power'
+export type ScienceGoal = 'minimum' | 'stretch'
 export type TestFocus = 'imaging' | 'downlink'
-export type ConfigStep = 'payload' | 'supply' | 'schedule' | 'radio'
+export type ConfigStep = 'launch' | 'payload' | 'supply' | 'schedule' | 'radio'
 type Contact = { choice: string; next: number; accepted: number; diagnosticsPending: boolean }
 
 export type DesignOption = { label: Message; description: Message; cost?: number; params?: Record<string, number | string> }
@@ -46,7 +49,7 @@ export type ReviewDecision = {
   detail?: Copy
 }
 
-export type SegmentChoice = { id: string; label: Message; detail: Copy }
+export type SegmentChoice = { id: string; label: Message; detail: Copy; consequence?: Copy; warning?: boolean; prompt?: string; resources?: { spareKg: number; credits: number; windows: number } }
 export type MissionFile = { title: Copy; detail: Copy; sources: readonly { title: string; url: string }[] }
 export type SegmentEntry = { id: string; choice: string | null; report?: Copy; updates?: Copy[] }
 export type FlightProgress = { steps: SegmentEntry[]; state: JsonObject; turn?: number; updates?: Copy[] }
@@ -54,6 +57,7 @@ export type FlightContext = { game: Game; evidence: Evidence | null; progress: F
 export type FlightSegment = {
   id: string
   title: Message
+  action?: Message
   brief?(context: FlightContext): Copy
   file?(context: FlightContext): MissionFile | undefined
   quote?(context: FlightContext): Message | undefined
@@ -108,6 +112,8 @@ export type Game = {
   testFocus?: TestFocus
   contact?: Contact
   configStep?: ConfigStep
+  scienceGoal?: ScienceGoal
+  commission?: CommissionId
   pendingWork?: PendingWork
   missionState?: JsonObject
   flightProgress?: FlightProgress
@@ -134,7 +140,7 @@ export type EventChoice = {
   id: string; label: Message; detail: Message
   values?(game: Game): Record<string, string | number>
   available?(game: Game): boolean
-  result?(game: Game): Copy
+  result?(game: Game, before: Game): Copy
   apply(game: Game): Game
 }
 
@@ -142,6 +148,8 @@ export type MissionEvent = {
   id: string
   title: Message
   detail: Message
+  // The event takes money away instead of spending it, so results and the log do not count it as spending.
+  reducesFunding?: boolean
   values?(game: Game): Record<string, string | number>
   file?: MissionFile
   quote?: Message
@@ -197,6 +205,8 @@ export type MissionRules = {
   risks?: MissionRisks
   initialize?(game: Game): Game
   validSave?(game: Game): boolean
+  reopenPdr?(game: Game, design: Design): boolean
+  configurable?(game: Game, group: string): boolean
   configure?(game: Game, design: Design): Game
   effectiveDeadline?(game: Game): number
   stopReason?(game: Game): Exclude<Stop, 'cancelled'> | null
@@ -207,6 +217,7 @@ export type MissionRules = {
     complete(game: Game): Game
     detail?(before: Game, after: Game): Copy | undefined
   }>
+  onReviewApproved?(game: Game, review: ReviewDecision): Game
   reviews?: Partial<Record<ReviewGate, (game: Game, evidence: Evidence | null) => Review | null>>
   segmentedFlight?: {
     segments: readonly FlightSegment[]

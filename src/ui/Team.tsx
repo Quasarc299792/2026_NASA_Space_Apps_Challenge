@@ -14,7 +14,7 @@ import { ReportCard } from './ReportCard'
 
 const current = testDesign(reviewDesign)
 const baseWeek = cubeSat.costs.assess.weeks + cubeSat.costs.freeze.weeks + cubeSat.costs.build.weeks + cubeSat.costs.integrate.weeks
-const baseBudget = cubeSat.budget - cubeSat.payloads[reviewDesign.payload].cost - cubeSat.supplies[reviewDesign.supply].cost
+const baseBudget = cubeSat.budget - cubeSat.launches[reviewDesign.launch].cost - cubeSat.payloads[reviewDesign.payload].cost - cubeSat.supplies[reviewDesign.supply].cost
   - cubeSat.costs.assess.credits - cubeSat.costs.freeze.credits - cubeSat.costs.build.credits - cubeSat.costs.integrate.credits
 
 const departmentContext = {

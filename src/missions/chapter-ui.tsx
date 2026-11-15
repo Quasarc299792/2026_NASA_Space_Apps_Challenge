@@ -1,15 +1,17 @@
 import type { ReactNode } from 'react'
-import type { CostItem, Game, MissionRules } from '../game/types'
+import type { Copy, CostItem, Game, MissionRules } from '../game/types'
 import type { Message, Translate } from '../i18n'
-import { defectBelief, hasDefect, percent, testResult, topLevel, type DefectState, type Maturity, type Outcome, type Severity } from '../game/risk'
+import { hasDefect, percent, testResult, topLevel, type DefectState, type Maturity, type Outcome, type Severity } from '../game/risk'
 import { Disclosure, missionMoney } from '../ui/shared'
 import type { MissionUi } from './index'
-import { completed, nextDefectCopy, severityMessage } from './chapter'
-import { flyOrbital, orbitalCarried, orbitalLaunch as orbital, orbitalLinkMaturity, orbitalNextStep, orbitalOdds, orbitalRiskIds, orbitalRisks, type OrbitalDesign } from './orbital-launch'
-import { orbitalRules, orbitalState } from './orbital-rules'
-import { lunarDesign, lunarPlanCost, lunarRules, lunarState, lunarStates, massBudget } from './lunar-rules'
-import { lunarItemId, lunarMaturity, lunarMission as lunar, lunarOdds, lunarRisks, type LunarFlightResult } from './lunar-mission'
+import { currentEvidence } from '../game/mission'
+import { approvedWeek, completed, nextDefectCopy, severityMessage } from './chapter'
+import { flyOrbital, orbitalCapacity, orbitalShortfall, orbitalCarried, orbitalDegradedCapacity, orbitalLaunch as orbital, orbitalLinkMaturity, orbitalNextStep, orbitalOdds, orbitalRiskIds, orbitalRisks, type OrbitalDesign } from './orbital-launch'
+import { orbitalPlanCost, orbitalRecords, orbitalRules, orbitalState } from './orbital-rules'
+import { lunarAllocation, lunarDesign, lunarDiagnosticRecords, lunarFlightRevised, lunarPlanCost, lunarRules, lunarState, lunarStates, massBudget } from './lunar-rules'
+import { lunarItemId, lunarMaturity, lunarMission as lunar, lunarOdds, lunarPlanBatches, lunarRisks, lunarVerified, type LunarFlightResult } from './lunar-mission'
 
+// Frames a low forecast: it reflects what has been checked, not a verdict on the lander.
 const levels = ['riskLevelNone', 'riskLevelAnalysis', 'riskLevelUnit', 'riskLevelEndToEnd'] as const
 const inert = () => null
 
@@ -43,7 +45,7 @@ function orbitalEstimate(game: Game, t: Translate) {
   const { lift, link } = orbitalRisks(game.seed, d, known)
   const work = orbital.costs[orbital.risks.lift.steps[known.lift]]
   return <>
-    <p>{t('orbitalCarried', { count: orbitalCarried(d) })} · {t('orbitalCapacityAnalysis', { count: orbital.stages[d.stage].capacityKg })}</p>
+    <p>{t('orbitalCarried', { count: orbitalCarried(d) })} · {t('orbitalCapacityAnalysis', { count: orbitalCapacity(d) })}</p>
     <RiskList t={t} odds={orbitalOdds(game.seed, d, known)} risks={[
       { ...lift, label: orbital.risks.lift.label, notes: <>
         <p>{t('orbitalRiskLiftDetail', { ...lift.known, margin: lift.limit })}</p>
@@ -59,7 +61,7 @@ function lunarEstimate(game: Game, t: Translate) {
   const states = lunarStates(game)
   const mass = massBudget(game)
   return <>
-    <p>{t('lunarPropellantLoaded', { ...mass, allocation: lunar.launchAllocationKg })} · {t('lunarPropellantNeed', { count: lunar.routes[d.route].propellantKg })}</p>
+    <p>{t('lunarPropellantLoaded', { ...mass, allocation: lunarAllocation(game) })} · {t('lunarPropellantNeed', { count: lunar.routes[d.route].propellantKg })}</p>
     <p>{t(mass.margin < 0 ? 'lunarMarginShort' : 'lunarMarginOk', { count: Math.abs(mass.margin) })}</p>
     {!completed(game, 'trade') && !game.evidence && <small>{t('lunarEstimateNote')}</small>}
     <RiskList t={t} odds={lunarOdds(d, states)} note="lunarForecastNote" risks={lunarRisks(d, states).map(item => ({
@@ -83,15 +85,35 @@ function OrbitalDebrief({ game, t }: { game: Game; t: Translate }) {
   const d = game.design as OrbitalDesign
   const knowledge = orbitalState(game)
   const outcomes = (game.flight?.outcomes ?? []) as Outcome[]
+  const flight = game.flight as (typeof game.flight & ReturnType<typeof flyOrbital>) | null
+  const records = orbitalRules.records?.(game) ?? []
   return <RiskResults game={game} t={t} rules={orbitalRules}>
+    {flight?.delivered && <>
+      <p>{t(d.orbit === 'sso' ? 'orbitalClientSso' : 'orbitalClientLow', { premium: flight.premium ?? 0 })}</p>
+      {flight.late && <p>{t('orbitalLateFee', { fee: flight.fee })}</p>}
+      <p>{t(records.includes(orbitalRecords.onTime) ? 'orbitalEarnedOnTime' : 'orbitalNoOnTime', {
+        week: approvedWeek(game) ?? game.week, limit: orbital.onTimeWeek,
+      })}</p>
+      <p>{t(records.includes(orbitalRecords.verified) ? 'orbitalEarnedVerified' : 'orbitalNoVerified', {
+        lift: knowledge.lift, link: knowledge.link.level, need: orbital.verifiedLevels,
+      })}</p>
+      {flight.marginProven && <p>{t('orbitalEarnedMargin', { kg: orbital.lunarMarginKg })}</p>}
+    </>}
+    {flight && <p>{t('orbitalDebriefOrbit', {
+      orbit: t(orbital.orbits[d.orbit].label), capacity: orbitalCapacity(d), carried: orbitalCarried(d),
+      shortfall: orbitalShortfall(game.seed, d.stage), margin: flight.marginKg,
+    })}</p>}
     {orbitalRiskIds.map(id => {
       const outcome = outcomes.find(item => item.id === id)
       const next = outcome?.failed && orbitalNextStep(game.seed, d, knowledge, id)
       return <div key={id} className="risk-item">
         <strong>{t(orbital.risks[id].label)}</strong>
         <p>{outcome ? t(outcome.failed ? 'riskFlightFailed' : 'riskFlightHeld', { item: t(orbital.risks[id].label), percent: percent(outcome.believed) }) : t('chapterDebriefUntested')}</p>
+        {outcome?.failed && <p>{t(orbital.risks[id].failure)}</p>}
+        {id === 'link' && outcome?.failed && knowledge.link.found && <p>{t('orbitalKnownLinkFlown', { weeks: orbital.fixes.link.weeks, credits: orbital.fixes.link.credits })}</p>}
+        {outcome?.failed && !next && (id === 'lift' ? knowledge.lift : knowledge.link.level) >= topLevel && <p>{t('riskDebriefTop')}</p>}
         {next && <p>{t(next.known ? 'riskDebriefRange' : next.found ? 'riskDebriefNext' : 'riskDebriefMissed', {
-          weeks: next.weeks, ...next.known, work: t(orbital.costs[next.work].label), cost: next.credits, unit: 'kg',
+          weeks: next.weeks, ...next.known, work: t(orbital.costs[next.work].label), cost: t('credits', { count: next.credits }), unit: 'kg',
         })}</p>}
         {id === 'link' && knowledge.link.fixed && <p>{t('chapterDebriefFixed')}</p>}
       </div>
@@ -109,15 +131,23 @@ function LunarDebrief({ game, t }: { game: Game; t: Translate }) {
     state.contract.kind === 'funding' ? lunar.tags.renewed : lunar.tags.coauthor : lunar.tags.independent
   return <RiskResults game={game} rules={lunarRules} t={t}>
     <p>{t(tag)}</p>
-    {state.secondPayload && <p>{t(lunar.tags.hosted)}</p>}
+    {state.secondPayload && !flight?.secondPayloadUsable && <p>{t('lunarHostedPending')}</p>}
     {state.governmentCold && <p>{t(lunar.tags.distant)}</p>}
     {flight?.engineering && <p>{t(lunar.tags.engineering)}</p>}
+    {lunarDiagnosticRecords(game).length > 0 && <p>{t('lunarDiagnosticReplay')}</p>}
     {flight?.cruiseData && <p>{t(lunar.tags.cruiseData)}</p>}
     {flight?.siteConfirmed && <p>{t(lunar.tags.siteConfirmed)}</p>}
-    {flight?.protectionOff && <p>{t('lunarRiskSoftwareDisable')}</p>}
-    {state.icd === 'open' && <p>{t('lunarCardIcdMismatchSkip')}</p>}
+    {flight?.protectionOff && <p>{t('lunarDebriefProtectionOff')}</p>}
+    {state.icd === 'open' && <p>{t('lunarDebriefIcdOpen')}</p>}
     {game.events.includes('PartsAlert:Fly') && <p>{t('lunarPartsAccepted')}</p>}
     {flight && <p>{t('lunarFlightRemaining', { kg: flight.spareKg, credits: flight.credits })}</p>}
+    {flight?.surface && <section>
+      <p>{t('lunarSurfaceLedger', { landed: flight.surface.landed, usable: flight.surface.usable, each: flight.surface.each, batches: flight.batches })}</p>
+      {flight.surface.spends?.map(({ source, count }) => <p key={source}>{t(`lunarWindows_${source}`, { count })}</p>)}
+    </section>}
+    {flight?.outcome === 'success' || flight?.outcome === 'extra' ? <p>{t('lunarClientDelivery')}</p> : null}
+    {flight?.secondPayloadUsable && <p>{t('lunarClientHosted')}</p>}
+    {flight && flight.exposed.length > 0 && <p>{t('lunarExposedCount', { count: flight.exposed.length })}</p>}
     {flight && risks.map(({ id, level, risk }) => {
       const item = lunar.risks[id]
       const state = states[id]
@@ -129,24 +159,97 @@ function LunarDebrief({ game, t }: { game: Game; t: Translate }) {
       const cost = next ? lunar.costs[next] : null
       return <div key={id} className="risk-item">
         <strong>{t(item.label)}</strong>
-        <p>{t('riskLevel', { level: t(levels[level]) })} · {t(hasDefect(game.seed, identity, maturity) ? 'lunarTruthDefect' : 'lunarTruthClean')}</p>
+        <p>{t('riskLevel', { level: t(levels[level]) })} · {t(lunarFlightRevised(game) && !flight.engineering && !state.found
+          ? 'lunarTruthUnknown' : hasDefect(game.seed, identity, maturity) ? 'lunarTruthDefect' : 'lunarTruthClean')}</p>
         <p>{flew ? t(hit ? 'riskFlightFailed' : 'riskFlightHeld', { item: t(item.label), percent: percent(risk) }) : t('chapterDebriefUntested')}</p>
         {state.fixed && <p>{t('chapterDebriefFixed')}</p>}
-        {hit && cost && <p>{t(flight.exposed.includes(id) && !hasDefect(game.seed, identity, maturity) ? 'lunarExposedDefect'
+        {hit && cost && (!lunarFlightRevised(game) || flight.engineering) && <p>{t(flight.exposed.includes(id) && !hasDefect(game.seed, identity, maturity) ? 'lunarExposedDefect'
           : testResult(game.seed, identity, maturity, level + 1) === 'found' ? 'riskDebriefNext' : 'riskDebriefMissed', {
-          work: t(cost.label), weeks: cost.weeks, cost: cost.credits,
+          work: t(cost.label), weeks: cost.weeks, cost: t('credits', { count: cost.credits }),
         })}</p>}
       </div>
     })}
   </RiskResults>
 }
 
+function OrbitalPreview({ game, t }: { game: Game; t: Translate }) {
+  const d = game.design as OrbitalDesign
+  const { lift } = orbitalRisks(game.seed, d, orbitalState(game))
+  const cost = orbitalPlanCost(game)
+  const ground = orbital.grounds[d.ground]
+  const source = orbital.sources.tradeSpace
+  return <>
+    <p className={lift.limit - lift.known.min < 0 ? 'warning' : 'action-note'}>{t(lift.known.min === lift.known.max ? 'orbitalTestedPreview'
+      : lift.limit < 0 ? 'orbitalPreviewOver' : 'orbitalPreview', {
+      carried: orbitalCarried(d), capacity: orbitalCapacity(d), margin: Math.abs(lift.limit), measured: lift.limit - lift.known.min, min: lift.known.min, max: lift.known.max,
+      orbit: t(orbital.orbits[d.orbit].label),
+    })}</p>
+    <p>{t('orbitalDataPlan', { required: orbital.confirmationUnits, capacity: ground.capacity,
+      degraded: orbitalDegradedCapacity(d, orbitalState(game)) })}</p>
+    {cost > 0 && <p className={cost > game.credits ? 'warning' : 'action-note'}>
+      {t(cost > game.credits ? 'orbitalFreezeBlocked' : 'orbitalEventCutEstimate', { cost, budget: game.credits })}
+    </p>}
+    {game.stage === 'design' && <p className="action-note">{t('orbitalTradeSource')} <a href={source.url} target="_blank" rel="noreferrer">{source.source}</a></p>}
+    {(game.stage === 'build' || game.stage === 'integration') && d.stage === 'highMargin' &&
+      <p className="action-note">{t('orbitalHotfireSource')} <a href={orbital.sources.hotfire.url} target="_blank" rel="noreferrer">{orbital.sources.hotfire.source}</a></p>}
+  </>
+}
+
+function LunarPreview({ game, t }: { game: Game; t: Translate }) {
+  const mass = massBudget(game)
+  const plan = lunarPlanCost(game)
+  const d = lunarDesign(game)
+  const route = lunar.routes[d.route]
+  return <>
+    <p className={mass.margin < lunar.reserveKg ? 'warning' : 'action-note'}>{t('lunarPreview', {
+      margin: mass.margin, reserve: lunar.reserveKg, dry: mass.dry, weeks: plan.weeks, credits: plan.credits,
+    })}</p>
+    <p>{t('lunarRouteBudget', { correction: route.correctionKg, propellant: route.propellantKg,
+      week: game.deadline - route.leadWeeks, allocation: lunarAllocation(game) })}</p>
+    {(completed(game, 'trade') || completed(game, 'prelim')) && game.stage === 'design' && <>
+      <p>{t('lunarTradeMount', { min: lunar.mounts.lightweight.growthKg, max: lunar.mounts.standard.growthKg })}</p>
+      <p>{t('lunarTradeRoute', { propellant: lunar.routes.direct.propellantKg - lunar.routes.lowEnergy.propellantKg, weeks: lunar.routes.lowEnergy.leadWeeks })}</p>
+      <p>{t('lunarTradeData', { count: lunarPlanBatches(d, 'extra', lunar.daylightWindows + lunar.powers[d.power].nightWindows).batches })}</p>
+    </>}
+  </>
+}
+
+const sourceList = (sources: Record<string, { source: string; url: string }>) =>
+  Object.entries(sources).filter(([id]) => !/^H\d+$/.test(id)).map(([, item]) => item)
+
 export const orbitalUi: MissionUi = {
+  Preview: OrbitalPreview,
+  TaskNote: ({ game, task, cost, t }) => {
+    const remedy = orbital.remedies[task as keyof typeof orbital.remedies]
+    if (remedy) return <p className="action-note">{t(remedy.description, {
+      count: orbital.adapters.standard.massKg - orbital.adapters.lightweight.massKg,
+      mass: orbital.telemetry.diagnostics.massKg - orbital.telemetry.basic.massKg,
+      units: orbital.telemetry.diagnostics.diagnosticUnits,
+      from: orbital.grounds.single.capacity, to: orbital.grounds.dual.capacity,
+      lift: orbital.orbits.sso.capacityLossKg,
+    })}</p>
+    if (task.startsWith('lab:')) {
+      const use = task.slice(4) as keyof typeof orbital.labSlot.uses
+      const item = orbital.labSlot.uses[use]
+      return <p className="action-note">{t(item.label, { credits: item.creditsSaved })}</p>
+    }
+    if (Object.values(orbital.risks).some(risk => risk.steps.some(step => step === task)) && game.credits - cost.credits < orbitalPlanCost(game)) {
+      return <p className="warning">{t('orbitalVerifyStarves', { left: game.credits - cost.credits, cost: orbitalPlanCost(game) })}</p>
+    }
+    return null
+  },
+  knownDefectAtLaunch: game => orbitalState(game).link.found && !orbitalState(game).link.fixed,
+  sources: sourceList(orbital.sources),
+  verificationWork: new Set(Object.values(orbital.risks).flatMap(risk => risk.steps)),
+  optionalTasks: new Set([
+    ...Object.values(orbital.risks).flatMap(risk => risk.steps), 'lab:rehearse', 'handover', ...Object.keys(orbital.remedies),
+  ]),
   Requirements: ({ t }) => <>
     <p>{t('orbitalBriefMinimum', { payload: orbital.testPayloadKg, units: orbital.confirmationUnits })}</p>
     <p>{t('orbitalBriefExtra', { margin: orbital.marginStretchKg, units: orbital.telemetry.diagnostics.diagnosticUnits })}</p>
+    <p>{t('orbitalBriefRecords', { week: orbital.onTimeWeek, levels: orbital.verifiedLevels, kg: orbital.lunarMarginKg })}</p>
   </>,
-  Status: ({ game, t }) => <>{orbitalState(game).lab && <p>{t(game.week < orbital.labSlot.expiresWeek ? 'orbitalLabSlotDetail' : 'orbitalLabSlotExpired', { week: orbital.labSlot.expiresWeek })}</p>}
+  Status: ({ game, t }) => <>{orbitalState(game).lab && <p>{t(game.week < orbital.labSlot.expiresWeek ? 'orbitalLabSlotDetail' : 'orbitalLabSlotExpired', { week: orbital.labSlot.expiresWeek, integrate: orbital.labSlot.uses.integrate.creditsSaved, rehearse: orbital.labSlot.uses.rehearse.creditsSaved })}</p>}
     {orbitalEstimate(game, t)}</>,
   Estimate: ({ game, t }) => orbitalEstimate(game, t),
   Forecast: inert, RemedyPreview: inert,
@@ -156,13 +259,35 @@ export const orbitalUi: MissionUi = {
   flightSummary: (flight, t) => flight.stop === 'ascent' ? t('orbitalIncompleteOrbit')
     : t('orbitalPassReceipt', { confirmation: flight.confirmation, diagnostics: flight.diagnostics }),
   outcome: game => {
-    if (!game.flight) return { title: orbital.outcomes.stopped.label, detail: { message: game.stop === 'funds' ? 'orbitalStopFunds' : game.stop === 'cancelled' ? 'orbitalStopCancelled' : 'orbitalStopDeadline' } }
+    if (!game.flight) return { title: orbital.outcomes.stopped.label, detail: { message: game.stop === 'margin' ? 'orbitalStopMargin' : game.stop === 'funds' ? 'orbitalStopFunds' : game.stop === 'cancelled' ? 'orbitalStopCancelled' : 'orbitalStopDeadline' } }
     const result = game.flight as typeof game.flight & ReturnType<typeof flyOrbital>
     return { title: orbital.outcomes[result.outcome].label, detail: { message: orbital.outcomes[result.outcome].description } }
   },
 }
 
 export const lunarUi: MissionUi = {
+  Preview: LunarPreview,
+  knownDefectAtLaunch: game => Object.values(lunarStates(game)).some(state => state.found && !state.fixed),
+  TaskNote: ({ game, task, t }) => {
+    const remedy = lunar.remedies[task as keyof typeof lunar.remedies]
+    if (!remedy && !task.startsWith('fix:')) return null
+    return <>
+      {remedy && <p className="action-note">{t(remedy.description, {
+        count: lunar.routes.direct.propellantKg - lunar.routes.lowEnergy.propellantKg, weeks: lunar.routes.lowEnergy.leadWeeks,
+        from: lunar.mounts.standard.growthKg, to: lunar.mounts.lightweight.growthKg, slots: 1,
+        mass: task === 'dropKit' ? lunar.powers.extended.massKg : lunar.payloads.advanced.massKg - lunar.payloads.basic.massKg,
+        windows: task === 'dropKit' ? lunar.powers.extended.nightWindows : lunar.payloads.basic.collectWindows,
+        kg: lunar.sensors.redundant.massKg - lunar.sensors.single.massKg, credits: remedy.credits,
+      })}</p>}
+      {currentEvidence(game) && <p className="action-note">{t('lunarRetestNote', lunar.costs.retest)}</p>}
+    </>
+  },
+  sources: sourceList(lunar.sources),
+  verificationWork: new Set(Object.values(lunar.risks).flatMap(risk => risk.steps.flatMap(step => [step, `support:${step}`]))),
+  optionalTasks: new Set([
+    ...Object.values(lunar.risks).flatMap(risk => risk.steps.flatMap(step => [step, `support:${step}`])),
+    'trade', ...Object.keys(lunar.remedies),
+  ]),
   Requirements: ({ t }) => <>
     <p>{t('lunarBriefMinimum', { count: lunar.minimumBatches })}</p>
     <p>{t('lunarBriefExtra', { count: lunar.stretchBatches })}</p>
@@ -183,30 +308,34 @@ export const lunarUi: MissionUi = {
   Forecast: inert, RemedyPreview: inert,
   Report: ({ evidence, t }) => <>
     <p>{t('lunarWeighingResult', { measured: evidence.mount, dry: evidence.dry })}</p>
-    <p>{t('lunarPropellantLoaded', { allocation: lunar.launchAllocationKg, loaded: evidence.loaded, dry: evidence.dry })}</p>
+    <p>{t('lunarPropellantLoaded', { allocation: evidence.dry + evidence.loaded, loaded: evidence.loaded, dry: evidence.dry })}</p>
   </>,
   Delivery: ({ flight, t }) => <p>{t('lunarGroundReceipt', { count: flight.batches })}</p>,
   Debrief: LunarDebrief,
   flightSummary: (flight, t) => t('lunarGroundReceipt', { count: flight.batches }),
-  outcome: (game, t) => {
+  outcome: (game, t): { title: Message; detail?: Copy } => {
     const flight = game.flight as LunarFlightResult | null
-    const ending = lunar.endings.find(item => item.outcome === (flight?.outcome ?? 'stopped') && item.closing === (flight?.closing ?? game.stop))
-    if (!ending) return { title: lunar.outcomes.stopped.label }
+    if (!flight) return { title: lunar.outcomes.stopped.label, detail: {
+      message: game.stop === 'deadline' ? 'lunarEndingStoppedDeadline' : game.stop === 'funds' ? 'lunarEndingStoppedFunds'
+        : game.events.includes('CostReview:Stop') ? 'lunarEndingStoppedCancelled' : 'lunarStoppedWithdrawn',
+      values: { credits: Math.max(0, lunarPlanCost(game).credits - game.credits) },
+    } }
+    const title = lunar.outcomes[flight.outcome].label
+    if (flight.critical === 'reserve') return { title, detail: { message: 'lunarTransferFail',
+      values: flight.reserveFailure ?? { need: -flight.spareKg, margin: 0 } } }
+    if (flight.critical === 'windows') return { title, detail: { message: 'lunarNoScienceWindows',
+      values: { usable: flight.surface?.usable ?? 0, each: flight.surface?.each ?? 0 } } }
     const states = lunarStates(game)
-    const risk = flight && (flight.outcome === 'success' || flight.outcome === 'extra' ? flight.failures[0] : flight.critical)
-    const critical = risk && risk !== 'choice' && risk !== 'reserve' ? risk : null
-    const id = critical ?? 'descent'
-    const level = critical ? states[id].level : 0
-    const next = critical && lunar.risks[id].steps[level]
-    const cost = next ? lunar.costs[next] : null
+    if (flight.outcome === 'success' || flight.outcome === 'extra') return { title, detail: { message: 'lunarGroundReceipt', values: { count: flight.batches } } }
+    if (flight.critical === 'choice') return { title, detail: { message: 'lunarEndingNoDataTradeoff' } }
+    const id = flight.critical
     const d = lunarDesign(game)
-    return { title: lunar.outcomes[ending.outcome].label, detail: { message: ending.text, values: {
-      item: t(critical ? lunar.risks[id].label : 'lunarWaiverReserve'),
-      level: t(levels[level]), weeks: cost?.weeks ?? 0, credits: cost?.credits ?? Math.max(0, lunarPlanCost(game).credits - game.credits),
-      percent: percent(critical ? defectBelief(lunarMaturity(d, id), states[id]) :
-        flight?.flown.reduce((chance, item) => chance * (1 - defectBelief(lunarMaturity(d, item), states[item])), 1) ?? 0),
-      count: flight?.flown.filter(item => !states[item].fixed && states[item].level < lunar.checkedLevel).length ?? 0,
-      segment: t(lunar.segments.find(segment => segment.id === flight?.segment)?.label ?? 'lunarLaunchTitle'),
-    } } }
+    const item = t(lunar.risks[id].label)
+    const segment = t(lunar.segments.find(segment => segment.id === flight.segment)?.label ?? 'lunarLaunchTitle')
+    const exposed = flight.exposed.includes(id) && (states[id].fixed || !hasDefect(game.seed, lunarItemId(d, id), lunarMaturity(d, id)))
+    const signed = game.log.some(entry => entry.review?.passed && entry.review.waivers.some(waiver => waiver.id === `risk:${id}`))
+    const message = exposed ? 'lunarEndingExposure' : states[id].found ? 'lunarEndingKnown'
+      : signed ? 'lunarEndingAccepted' : lunarVerified(states[id]) ? 'lunarEndingEscaped' : 'lunarEndingObserved'
+    return { title, detail: { message, values: { item, segment } } }
   },
 }

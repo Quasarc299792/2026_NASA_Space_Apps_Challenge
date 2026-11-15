@@ -30,7 +30,7 @@ test('a triggered event blocks other actions until a choice is made', () => {
   assert.equal(runMission(game, { type: 'choose', choice: 'missing' }), game)
   game = runMission(game, { type: 'choose', choice: 'accept' })
   assert.equal(game.event, null)
-  assert.equal(game.credits, 100 - 6 - 30)
+  assert.equal(game.credits, 110 - 6 - 30)
   assert.equal(eventChoice(game, 'budgetCut'), 'accept')
   assert.equal(game.log.at(-1)?.label, 'remedyBasic')
   assert.equal(game.log.at(-1)?.cost, 30)

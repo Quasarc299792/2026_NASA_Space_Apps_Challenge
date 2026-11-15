@@ -11,6 +11,7 @@ type Source = { source: string; url: string }
 type OrbitalShape = {
   title: Message
   brief: Message
+  orbits: Record<string, Text & { altitudeKm: number; inclination: number; capacityLossKg: number; bonus: number; cost: number }>
   stages: Record<string, Text & { capacityKg: number; shortfallKg: Range; maturity: Maturity; cost: number }>
   telemetry: Record<string, Text & { massKg: number; diagnosticUnits: number; cost: number }>
   adapters: Record<string, Text & { massKg: number; cost: number }>
@@ -37,7 +38,7 @@ export const orbitalLaunch = {
   deadline: 12,
   budget: 196,
   playMinutes: '8–12',
-  initialDesign: { stage: 'standard', telemetry: 'basic', adapter: 'standard', ground: 'single' },
+  initialDesign: { orbit: 'low', stage: 'standard', telemetry: 'basic', adapter: 'standard', ground: 'single' },
 
   // Performance. Margin = stage capacity to the target orbit − carried mass.
   // The stage delivers capacityKg minus a hidden shortfall drawn from shortfallKg at the start of the run.
@@ -48,6 +49,13 @@ export const orbitalLaunch = {
   // Data, counted in units that fit in the first ground pass.
   confirmationUnits: 2,
 
+  // The sponsor accepts either orbit. A higher, near-polar orbit costs the stage lift capacity: it climbs higher and
+  // gets less help from Earth's rotation. capacityLossKg comes off every stage's capacity. bonus is what the sponsor
+  // pays on delivery for the orbit its customer wants. Game settings, not a launch provider's figures.
+  orbits: {
+    low: { label: 'orbitalOrbitLow', description: 'orbitalOrbitLowDetail', altitudeKm: 400, inclination: 51.6, capacityLossKg: 0, bonus: 0, cost: 0 },
+    sso: { label: 'orbitalOrbitSso', description: 'orbitalOrbitSsoDetail', altitudeKm: 550, inclination: 97.6, capacityLossKg: 20, bonus: 16, cost: 0 },
+  },
   stages: {
     standard: { label: 'orbitalStageStandard', description: 'orbitalStageStandardDetail', capacityKg: 106, shortfallKg: { min: 0, max: 7 }, maturity: 'heritage', cost: 30 },
     highMargin: { label: 'orbitalStageHighMargin', description: 'orbitalStageHighMarginDetail', capacityKg: 130, shortfallKg: { min: 0, max: 45 }, maturity: 'new', cost: 56 },
@@ -87,7 +95,7 @@ export const orbitalLaunch = {
     label: 'orbitalLabSlot',
     description: 'orbitalLabSlotDetail',
     from: 'cubesat',
-    expiresWeek: 8,
+    expiresWeek: 10,
     uses: {
       integrate: { label: 'orbitalLabSlotIntegrate', creditsSaved: 12 },
       rehearse: { label: 'orbitalLabSlotRehearse', creditsSaved: 8 },
@@ -97,6 +105,8 @@ export const orbitalLaunch = {
   // onTime: minimum met and FRR approved by onTimeWeek. verified: minimum met with every risk item verified at FRR
   // and at least verifiedLevels verification steps done in total.
   onTimeWeek: 10,
+  lateDeliveryFee: 10,
+  lunarMarginKg: 10,
   verifiedLevels: 3,
   records: {
     onTime: { label: 'orbitalRecordOnTime', description: 'orbitalRecordOnTimeDetail' },
@@ -125,6 +135,7 @@ export const orbitalLaunch = {
   },
   // Changes after CDR. A remedy applied after integration makes that evidence stale and needs a retest.
   remedies: {
+    retarget: { weeks: 1, credits: 0, label: 'orbitalRemedyRetarget', description: 'orbitalRemedyRetargetDetail', requires: 'orbitalRequiresSso' },
     adapter: { weeks: 1, credits: 8, label: 'orbitalRemedyAdapter', description: 'orbitalRemedyAdapterDetail', requires: 'orbitalRequiresStandardAdapter' },
     dropDiagnostics: { weeks: 1, credits: 4, label: 'orbitalRemedyDropDiagnostics', description: 'orbitalRemedyDropDiagnosticsDetail', requires: 'orbitalRequiresDiagnostics' },
     dualStation: { weeks: 1, credits: 10, label: 'orbitalRemedyDualStation', description: 'orbitalRemedyDualStationDetail', requires: 'orbitalRequiresSingle' },
@@ -181,6 +192,7 @@ export const orbitalProposals = {
 } as const satisfies Record<OrbitalDepartment, { label: Message; options: readonly (keyof typeof orbitalLaunch.remedies)[]; fallback: keyof typeof orbitalLaunch.remedies; brief: Message }>
 
 export type OrbitalDesign = {
+  orbit: keyof typeof orbitalLaunch.orbits
   stage: keyof typeof orbitalLaunch.stages
   telemetry: keyof typeof orbitalLaunch.telemetry
   adapter: keyof typeof orbitalLaunch.adapters
@@ -188,10 +200,15 @@ export type OrbitalDesign = {
 }
 export type OrbitalRisk = keyof typeof orbitalLaunch.risks
 // What the player has learned so far: the lift verification level and the state of the link item.
-export type OrbitalKnowledge = { lift: number; link: DefectState }
+export type OrbitalKnowledge = { lift: number; link: DefectState; handover?: boolean }
 export type OrbitalPlan = keyof typeof orbitalLaunch.passPlans
 export const orbitalRiskIds = Object.keys(orbitalLaunch.risks) as OrbitalRisk[]
 export const orbitalUnknown: OrbitalKnowledge = { lift: 0, link: untested }
+
+// What the chosen stage lifts to the chosen orbit by analysis, before the hidden shortfall.
+export function orbitalCapacity(design: OrbitalDesign) {
+  return orbitalLaunch.stages[design.stage].capacityKg - orbitalLaunch.orbits[design.orbit ?? 'low'].capacityLossKg
+}
 
 export function orbitalCarried(design: OrbitalDesign) {
   return orbitalLaunch.testPayloadKg + orbitalLaunch.telemetry[design.telemetry].massKg + orbitalLaunch.adapters[design.adapter].massKg
@@ -223,7 +240,7 @@ export function verifyOrbitalLink(seed: number, design: OrbitalDesign, state: De
 // What the workbench shows for each item: the player's current belief, not the truth.
 export function orbitalRisks(seed: number, design: OrbitalDesign, known: OrbitalKnowledge) {
   const stage = orbitalLaunch.stages[design.stage]
-  const limit = stage.capacityKg - orbitalCarried(design)
+  const limit = orbitalCapacity(design) - orbitalCarried(design)
   const range = knownRange(stage.shortfallKg, orbitalShortfall(seed, design.stage), known.lift)
   const maturity = orbitalLinkMaturity(design)
   return {
@@ -238,11 +255,17 @@ export function orbitalBestMargin(seed: number, design: OrbitalDesign, known: Or
   return limit - range.min
 }
 
+export function orbitalDegradedCapacity(design: OrbitalDesign, known: OrbitalKnowledge) {
+  const handover = known.handover ?? known.link.level >= 2
+  return !handover && design.ground === 'dual' ? orbitalLaunch.grounds.single.degradedCapacity
+    : orbitalLaunch.grounds[design.ground].degradedCapacity
+}
+
 // The forecast is built from the player's beliefs and assumes orbit confirmation is sent first.
 export function orbitalOdds(seed: number, design: OrbitalDesign, known: OrbitalKnowledge) {
   const ground = orbitalLaunch.grounds[design.ground]
   return missionOdds(Object.values(orbitalRisks(seed, design, known)), failed =>
-    (failed.has('link') ? ground.degradedCapacity : ground.capacity) >= orbitalLaunch.confirmationUnits)
+    (failed.has('link') ? orbitalDegradedCapacity(design, known) : ground.capacity) >= orbitalLaunch.confirmationUnits)
 }
 
 // For the debrief: the next verification step for an item and what it would have told the player.
@@ -269,18 +292,22 @@ export function flyOrbital(seed: number, design: OrbitalDesign, known: OrbitalKn
   const shortfall = orbitalShortfall(seed, design.stage)
   const marginKg = risks.lift.limit - shortfall
   const outcomes: Outcome[] = [{ id: 'lift', believed: risks.lift.risk, failed: marginKg < 0, value: shortfall, limit: risks.lift.limit }]
-  const flown = { outcomes, marginKg, marginProven: false, capacity: 0, confirmation: 0, diagnostics: 0 }
+  const flown = { outcomes, marginKg, marginProven: false, capacity: 0, confirmation: 0, diagnostics: 0, late: false, firstConfirmation: 0 }
   if (marginKg < 0) return { ...flown, outcome: 'incomplete', stop: 'ascent' } as const
-  const defect = defectInFlight(seed, orbitalLinkId(design), risks.link.maturity, known.link)
+  const defect = !known.link.fixed && (known.link.found || defectInFlight(seed, orbitalLinkId(design), risks.link.maturity, known.link))
   outcomes.push({ id: 'link', believed: risks.link.risk, failed: defect })
   const ground = orbitalLaunch.grounds[design.ground]
-  const capacity = defect ? ground.degradedCapacity : ground.capacity
+  const capacity = defect ? orbitalDegradedCapacity(design, known) : ground.capacity
   const available = orbitalLaunch.telemetry[design.telemetry].diagnosticUnits
   const first = orbitalLaunch.passPlans[plan].diagnosticsFirst
   const diagnostics = Math.min(available, first ? capacity : Math.max(0, capacity - orbitalLaunch.confirmationUnits))
-  const confirmation = Math.min(orbitalLaunch.confirmationUnits, capacity - (first ? diagnostics : 0))
+  const firstConfirmation = Math.min(orbitalLaunch.confirmationUnits, capacity - (first ? diagnostics : 0))
+  // A second contact can recover confirmation queued behind diagnostics on a usable link.
+  const late = first && available > 0 && capacity >= orbitalLaunch.confirmationUnits
+    && firstConfirmation < orbitalLaunch.confirmationUnits
+  const confirmation = late ? orbitalLaunch.confirmationUnits : firstConfirmation
   const marginProven = known.lift >= topLevel && marginKg >= orbitalLaunch.marginStretchKg
-  const passed = { ...flown, marginProven, capacity, confirmation, diagnostics }
+  const passed = { ...flown, marginProven, capacity, confirmation, diagnostics, late, firstConfirmation }
   if (confirmation < orbitalLaunch.confirmationUnits) return { ...passed, outcome: 'incomplete', stop: 'pass' } as const
   return { ...passed, outcome: marginProven || (available > 0 && diagnostics === available) ? 'extra' : 'success', stop: '' } as const
 }

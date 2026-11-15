@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { newGame, runMission, type Game } from '../src/game/mission'
-import { initialDesign, resolveTeamReview, testDesign } from '../src/missions/cubesat'
+import { availableWeeks, newGame, runMission, type Game } from '../src/game/mission'
+import { initialDesign, repairOptions, resolveTeamReview, testDesign } from '../src/missions/cubesat'
 
 function work(game: Game, count: number) {
   for (let week = 0; week < count; week += 1) game = runMission(game, { type: 'work' })
@@ -50,7 +50,8 @@ test('team corrections use the same test, power tradeoffs and costs', () => {
   assert.equal(stagger.weeks, 2)
   assert.equal(stagger.credits, 14)
   assert.equal(stagger.evidence.batches, 3)
-  assert.equal(upgraded.evidence.batches, 4)
+  // The team review flies on the sun-synchronous rideshare, whose longer pass carries all 5 batches.
+  assert.equal(upgraded.evidence.batches, 5)
   assert.equal(upgraded.credits, 24)
 })
 
@@ -73,7 +74,7 @@ test('integration playback consumes one test and one return even with stale adva
 
 test('ground delivery counts accepted batches and ignores unchecked or repeated batch actions', () => {
   let game = newGame()
-  game = runMission(game, { type: 'configure', design: { ...initialDesign, payload: 'advanced', supply: 'reinforced' } })
+  game = runMission(game, { type: 'configure', design: { ...initialDesign, launch: 'rideshare', payload: 'advanced', supply: 'reinforced' } })
   const approved = runMission(work(game, 4), { type: 'review' })
   assert.equal(approved.stage, 'flight')
   assert.equal(runMission(approved, { type: 'checkBatch', batch: 0, deliver: true }), approved)
@@ -81,12 +82,44 @@ test('ground delivery counts accepted batches and ignores unchecked or repeated 
   assert.equal(runMission(game, { type: 'checkBatch', batch: 1, deliver: true }), game)
   game = runMission(game, { type: 'checkBatch', batch: 0, deliver: false })
   assert.equal(runMission(game, { type: 'checkBatch', batch: 0, deliver: true }), game)
-  for (let batch = 1; batch <= 3; batch += 1) game = runMission(game, { type: 'checkBatch', batch, deliver: true })
+  for (let batch = 1; batch <= 4; batch += 1) game = runMission(game, { type: 'checkBatch', batch, deliver: true })
   assert.equal(game.stage, 'results')
-  assert.equal(game.flight?.batches, 3)
+  assert.equal(game.flight?.batches, 4)
   assert.equal(game.flight?.archived, 1)
-  assert.equal(game.flight?.stretch, false)
+  assert.equal(game.flight?.stretch, true)
   assert.equal(game.log.filter(entry => entry.id === 'operate').length, 1)
   assert.equal(game.credits, approved.credits)
   assert.equal(game.week, approved.week)
+})
+
+test('the launch sets the mass limit, the first pass and the delivery date', () => {
+  const challenge = { ...initialDesign, payload: 'advanced', supply: 'reinforced' } as const
+  // 2.4 kg bus + 0.8 kg camera + 1 kg supply is over the ISS deployer limit.
+  const onIss = testDesign(challenge)
+  assert.deepEqual([onIss.mass, onIss.massLimit, onIss.massPass, onIss.powerPass], [4.2, 4, false, true])
+  assert.deepEqual(onIss.checks, [true, true, true, false])
+  assert.deepEqual(repairOptions(challenge), ['basic'], 'only a lighter camera brings this design under the ISS limit')
+  const rideshare = testDesign({ ...challenge, launch: 'rideshare' })
+  assert.deepEqual([rideshare.massPass, rideshare.contactCapacity, rideshare.batches], [true, 5, 5])
+  // The lighter designs still fit the ISS deployer, whose shorter pass holds 4 batches after the standard radio wait.
+  assert.deepEqual([testDesign(initialDesign).mass, testDesign(initialDesign).contactCapacity], [3.3, 4])
+  assert.equal(testDesign({ ...initialDesign, payload: 'advanced', schedule: 'stagger' }).massPass, true)
+
+  let game = newGame('cubesat')
+  game = runMission(game, { type: 'configure', design: { ...game.design, launch: 'rideshare' } })
+  assert.equal(availableWeeks(game), 5, 'the rideshare wants the satellite a week earlier')
+  game = work(game, 2)
+  assert.equal(game.credits, 110 - 6 - (6 + 16 + 14 + 12), 'the freeze books the launch with the hardware')
+})
+
+test('a design over the launch limit is returned at flight review even when power and data pass', () => {
+  let game = newGame('cubesat')
+  game = runMission(game, { type: 'configure', design: { ...game.design, payload: 'advanced', supply: 'reinforced' } })
+  game = runMission(work(game, 4), { type: 'review' })
+  assert.equal(game.returned, true)
+  assert.equal(game.evidence?.massPass, false)
+  game = runMission(game, { type: 'repair', remedy: 'basic' })
+  game = runMission(work(game, 1), { type: 'review' })
+  assert.equal(game.stage, 'flight')
+  assert.equal(game.evidence?.mass, 3.8)
 })

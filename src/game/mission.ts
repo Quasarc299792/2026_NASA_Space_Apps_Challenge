@@ -1,11 +1,12 @@
-import { missionCatalog, missionRules } from '../missions/rules'
+import type { CommissionId } from '../missions/cubesat-commission'
+import { getMissionRules, missionCatalog } from '../missions/rules'
 import { reviewRiskThreshold, untested, verifyDefect, type DefectState } from './risk'
 import type { Action, Cost, Design, FlightResult, Game, MissionRules, ReviewDecision, ReviewGate, Stop, TestResult, TimedJob, Work } from './types'
 
 export type * from './types'
 
-export function rulesFor(game: Pick<Game, 'missionId'>): MissionRules {
-  return missionRules[game.missionId]
+export function rulesFor(game: Pick<Game, 'missionId' | 'commission'>): MissionRules {
+  return getMissionRules(game)
 }
 
 export function passes(evidence: Pick<TestResult, 'checks'>) {
@@ -19,10 +20,10 @@ const workOrder: Work[] = Object.values(stageWork)
 // are not about risk stay deterministic.
 export const defaultSeed = 6
 
-export function newGame(missionId: string = missionCatalog[0].id, records: string[] = [], seed: number = defaultSeed): Game {
-  const mission = missionRules[missionId]
+export function newGame(missionId: string = missionCatalog[0].id, records: string[] = [], seed: number = defaultSeed, commission?: CommissionId): Game {
+  const mission = getMissionRules({ missionId, commission })
   const game: Game = {
-    missionId, stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
+    missionId, ...(commission && { commission }), stage: 'feasibility', week: 0, deadline: mission.deadline, credits: mission.budget, design: mission.initialDesign,
     revision: 0, gate: 'MDR', analysis: null, evidence: null, flight: null, stop: null, returned: false,
     event: null, events: [], records, log: [], seed: seed >>> 0, risks: {}, accepted: [], outcomes: [],
   }
@@ -283,13 +284,17 @@ function submitReview(game: Game, waiverIds: readonly string[]) {
   const offered = review.issues.flatMap(issue => issue.waiver ? [issue.waiver] : [])
   if (new Set(waiverIds).size !== waiverIds.length || waiverIds.some(id => !offered.some(waiver => waiver.id === id))) return game
   const passed = review.issues.every(issue => issue.waiver && waiverIds.includes(issue.waiver.id))
-  const detail = passed ? review.approve : review.return
+  // When only signatures are missing, say so instead of the chapter's general return note.
+  const unsigned = review.issues.filter(issue => issue.waiver && !waiverIds.includes(issue.waiver.id))
+  const onlyUnsigned = !passed && unsigned.length > 0 && review.issues.every(issue => issue.waiver)
+  const detail = passed ? review.approve : onlyUnsigned ? { message: 'reviewUnsigned' as const, values: { count: unsigned.length } } : review.return
   const waivers = passed ? offered.filter(waiver => waiverIds.includes(waiver.id)).map(({ id, label }) => ({ id, label })) : []
   const decision: ReviewDecision = { gate: review.gate, passed, waivers, ...(detail && { detail }) }
-  const next: Game = !passed ? { ...game, returned: true }
+  const next: Game = !passed ? { ...game, returned: !onlyUnsigned }
     : review.gate === 'PDR' ? { ...game, gate: 'CDR', returned: false }
     : { ...game, stage: 'flight', gate: 'FRR', returned: false }
-  return advance(record(next, passed ? 'approve' : 'return', 0, { review: decision, ...(evidence && { report: evidence }) }))
+  const approved = passed ? mission.onReviewApproved?.(next, decision) ?? next : next
+  return advance(record(approved, passed ? 'approve' : 'return', 0, { review: decision, ...(evidence && { report: evidence }) }))
 }
 
 function resolveSegment(game: Game, segmentId: string, choice: string | null, turn?: number): Game {
@@ -346,7 +351,7 @@ export function runMission(game: Game, action: Action): Game {
       if (!event || (action.event !== undefined && action.event !== event.id) || !choice || choice.available?.(game) === false) return game
       const applied = choice.apply(game)
       const resolved = { ...applied, credits: Math.max(0, applied.credits), event: null, events: [...game.events, `${event.id}:${choice.id}`] }
-      const detail = choice.result?.(resolved)
+      const detail = choice.result?.(resolved, game)
       const next = record(resolved, 'event', Math.max(0, game.credits - resolved.credits),
         { label: choice.label, event: event.id, ...(detail && { detail }) })
       if (applied.credits < 0) return stop(next, 'funds')
@@ -356,9 +361,10 @@ export function runMission(game: Game, action: Action): Game {
     }
     case 'configure':
       if (!canConfigure(game) || sameDesign(game.design, action.design)
-        || !Object.entries(mission.groups).every(([key, group]) => Object.hasOwn(group.options, action.design[key]))) return game
+        || !Object.entries(mission.groups).every(([key, group]) => Object.hasOwn(group.options, action.design[key])
+          && (game.design[key] === action.design[key] || mission.configurable?.(game, key) !== false))) return game
       const configured = mission.configure?.(game, action.design) ?? reconcileRisks(game, action.design)
-      return game.stage === 'design' && mission.reviews?.PDR ? { ...configured, gate: 'PDR', returned: false } : configured
+      return game.stage === 'design' && mission.reviews?.PDR && mission.reopenPdr?.(game, action.design) !== false ? { ...configured, gate: 'PDR', returned: false } : configured
     case 'configStep':
       return mission.configurationSteps?.[game.stage]?.includes(action.step) ? { ...game, configStep: action.step } : game
     case 'work':

@@ -1,8 +1,10 @@
 # 中等／入軌火箭
 
+現行入軌流程、雙站交接規則及跨章回報見[入軌故事審查 §7](../story-orbital.md#7-改版處理狀態)。下方原型試算與路線表供對照。
+
 團隊接到入軌示範合約。最低要求是把無人測試酬載送入指定軌道，並交付足以確認示範結果的資料。團隊還希望提高承載餘裕，或多帶回一組飛行診斷資料。
 
-資料檔和風險規則在 [`src/missions/orbital-launch.ts`](../../src/missions/orbital-launch.ts)，文案鍵都以 `orbital` 開頭。共用的風險規則在 [`src/game/risk.ts`](../../src/game/risk.ts)，說明在 [README「突發事件與測試結果」](../../README.md#突發事件與測試結果)。章節由 [`orbital-rules.ts`](../../src/missions/orbital-rules.ts) 接入共用引擎。[`tests/orbital-launch.test.ts`](../../tests/orbital-launch.test.ts) 依本文件的規則，用固定種子重跑每條驗算路線，並對每種策略跑 2000 個種子。
+資料檔和風險規則在 [`src/missions/orbital-launch.ts`](../../src/missions/orbital-launch.ts)，文案鍵都以 `orbital` 開頭。共用的風險規則在 [`src/game/risk.ts`](../../src/game/risk.ts)，說明在 [遊戲設計「突發事件與測試結果」](../game-design.md#突發事件與測試結果)。章節由 [`orbital-rules.ts`](../../src/missions/orbital-rules.ts) 接入共用引擎。[`tests/orbital-launch.test.ts`](../../tests/orbital-launch.test.ts) 依本文件的規則，用固定種子重跑每條驗算路線，並對每種策略跑 2000 個種子。
 
 文中的質量、經費、週數、門檻、百分比和數值範圍都是**遊戲設定**，不是 NASA 的數字。工程因果對照 NASA 來源，連結附在各節。
 

@@ -390,15 +390,15 @@ test('flight review sends back a stack that is known to be too heavy', () => {
   assert.equal(run.over, false)
 })
 
-test('seed 12, bad news without the means to fix it: a second station keeps the minimum, a fix breaks the budget', () => {
+test('seed 12: an untested second station cannot cover a known link fault', () => {
   assert.deepEqual(play(4, routes.diagnostics), {
     week: 9, spent: 171, left: 5, outcome: 'extra', stop: '', confirmation: 2, diagnostics: 3, marginProven: false, margin: 7,
-    flew: ['lift 0% held', 'link 25% held'], found: [], accepted: ['link'], forecast: { minimum: 100, noFatal: 100 }, onTime: true, verified: false,
+    flew: ['lift 0% held', 'link 25% held'], found: [], accepted: ['link'], forecast: { minimum: 75, noFatal: 100 }, onTime: true, verified: false,
   })
-  // The analysis finds the defect. Flying with it loses the diagnostics, and the second station still carries the confirmation data.
+  // The analysis finds the defect. The link cannot carry the whole confirmation without proven handover.
   assert.deepEqual(play(12, routes.diagnostics), {
-    week: 9, spent: 171, left: 5, outcome: 'success', stop: '', confirmation: 2, diagnostics: 1, marginProven: false, margin: 10,
-    flew: ['lift 0% held', 'link 100% failed'], found: ['link by linkAnalysis'], accepted: ['link'], forecast: { minimum: 100, noFatal: 100 }, onTime: true, verified: false,
+    week: 9, spent: 171, left: 5, outcome: 'incomplete', stop: 'pass', confirmation: 1, diagnostics: 0, marginProven: false, margin: 10,
+    flew: ['lift 0% held', 'link 100% failed'], found: ['link by linkAnalysis'], accepted: ['link'], forecast: { minimum: 0, noFatal: 100 }, onTime: false, verified: false,
   })
   // Paying for the fix leaves too little for the integration test: no launch.
   assert.deepEqual(play(12, [
@@ -507,7 +507,7 @@ test('balance: success rates over 2000 seeds stay inside the design targets', ()
   const measured = Object.fromEntries(Object.entries(strategies).map(([name, strategy]) => [name, rate(strategy)])) as Record<keyof typeof strategies, ReturnType<typeof rate>>
   if (process.env.ORBITAL_BALANCE) console.table(measured)
   assert.ok(measured.stageWithTwoTests.minimum >= 0.85)
-  assert.ok(measured.diagnosticsWithTwoTests.minimum >= 0.85)
+  assert.ok(measured.diagnosticsWithTwoTests.minimum >= 0.58)
   assert.ok(measured.bothUpgradesNoTests.minimum <= 0.3)
   assert.ok(measured.everythingVerified.launched < 0.15)
   assert.ok(measured.baselineWithTwoTests.minimum > measured.baselineNoTests.minimum + 0.1)

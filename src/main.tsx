@@ -6,22 +6,27 @@ import '@fontsource-variable/bricolage-grotesque'
 import '@fontsource/ibm-plex-mono/400.css'
 import './style.css'
 import spacecraft from './assets/cubesat-pixel.png'
-import { type Action, type Game, newGame, runMission } from './game/mission'
+import { type Action, type Game, type ScienceGoal, newGame, runMission } from './game/mission'
 import { readGame, readLocal, writeGame, writeLocal } from './game/storage'
 import { languageKey, preferredLanguage, translator, type Language, type Translate } from './i18n'
 import { carriedRecords, completeMission, isUnlocked, readProgress, reputation, writeProgress, type Progress } from './game/progress'
-import { missionCatalog, missions } from './missions'
+import { commissionMission, missionCatalog, missions } from './missions'
+import { lunarDiagnosticRecords } from './missions/lunar-rules'
+import type { CommissionId } from './missions/cubesat-commission'
 import { Brief, Single } from './ui/Single'
+import { Portfolio } from './ui/Story'
 import { ActionButton, Disclosure } from './ui/shared'
 import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 
 const Team = lazy(() => import('./ui/Team'))
 
 type Screen = 'lobby' | 'brief' | 'single' | 'team'
-type SessionAction = Action | { type: 'new'; missionId: string; records: string[]; seed: number }
+type SessionAction = Action | { type: 'new'; missionId: string; records: string[]; seed: number; scienceGoal?: ScienceGoal; commission?: CommissionId }
 
 function session(game: Game | null, action: SessionAction) {
-  return action.type === 'new' ? newGame(action.missionId, action.records, action.seed) : game && runMission(game, action)
+  if (action.type !== 'new') return game && runMission(game, action)
+  const next = newGame(action.missionId, action.records, action.seed, action.commission)
+  return action.scienceGoal ? { ...next, scienceGoal: action.scienceGoal } : next
 }
 
 // Every run gets a seed. Add ?seed=123 to the address to replay a particular run.
@@ -31,23 +36,31 @@ function runSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000
 }
 
+const difficulty = ['difficultyEasy', 'difficultyMedium', 'difficultyHard'] as const
+const heroDetails = { cubesat: 'heroDetail', 'orbital-launch': 'heroOrbitalDetail', 'lunar-mission': 'heroLunarDetail' } as const
+
+// The mission the lobby points at: the first unlocked one whose minimum goals are not met yet, or the last one.
+function recommendedMission(progress: Progress) {
+  return missionCatalog.find(item => missions[item.id] && isUnlocked(progress, item.id) && !progress.missions[item.id]?.minimum)
+    ?? missionCatalog.at(-1)!
+}
+
 function Lobby({ t, game, progress, open, resume, team }: {
   t: Translate; game: Game | null; progress: Progress; open: (missionId: string) => void; resume: () => void; team: () => void
 }) {
-  const first = missionCatalog[0]
-  const openFirst = () => open(game?.missionId ?? first.id)
   const finished = game?.stage === 'results' && !game.playback
   const inProgress = game !== null && !finished
+  const featured = inProgress ? { id: game.missionId, title: missions[game.missionId].title } : recommendedMission(progress)
+  const first = !inProgress && featured.id === missionCatalog[0].id && !progress.missions[featured.id]
   return <>
     <section className="lobby">
       <div className="lobby-copy">
         <p className="eyebrow">{t('challenge')}</p>
-        <h1>{t('heroTitle')}</h1>
-        <p className="lobby-intro">{t('heroDetail')}</p>
-        <p className="lobby-duration">{t('duration', { minutes: missions[first.id].playMinutes })} · {t('single')}</p>
+        <h1>{first ? t('heroTitle') : t(inProgress ? 'heroContinue' : 'heroNext', { mission: t(featured.title) })}</h1>
+        <p className="lobby-intro">{t(heroDetails[featured.id as keyof typeof heroDetails] ?? 'heroDetail')}</p>
+        <p className="lobby-duration">{t('duration', { minutes: missions[featured.id].playMinutes })} · {t('single')}</p>
         <div className="action-row">
-          <ActionButton onClick={inProgress ? resume : openFirst}>{t(inProgress ? 'continue' : finished ? 'newMission' : 'briefAction')}</ActionButton>
-          {inProgress && <button className="text-button" onClick={openFirst}>{t('newMission')}</button>}
+          <ActionButton onClick={inProgress ? resume : () => open(featured.id)}>{t(inProgress ? 'continue' : 'briefAction')}</ActionButton>
           {finished && <button className="text-button" onClick={resume}>{t('previousResults')}</button>}
         </div>
       </div>
@@ -56,20 +69,32 @@ function Lobby({ t, game, progress, open, resume, team }: {
         <figcaption>{t('lobbyArtCaption')}</figcaption>
       </figure>
     </section>
+    <section className="mission-cards" aria-labelledby="mission-list">
+      <div className="mission-cards-head">
+        <h2 id="mission-list">{t('missionList')}</h2>
+        <p>{t('reputation')} · {reputation(progress)} <small>{t('reputationDetail')}</small></p>
+      </div>
+      <ol>
+        {missionCatalog.map(({ id, title }, index) => {
+          const record = progress.missions[id]
+          const unlocked = Boolean(missions[id]) && isUnlocked(progress, id)
+          return <li key={id} data-mission={id} className={unlocked ? 'mission-card' : 'mission-card locked'}>
+            <span className="eyebrow">{t('missionNumber', { count: index + 1 })} · {t(difficulty[index] ?? 'difficultyHard')}</span>
+            <strong>{t(title)}</strong>
+            <small>{t('duration', { minutes: missions[id]?.playMinutes ?? '?' })}</small>
+            <small className={record?.minimum ? 'good' : undefined}>{!missions[id] ? t('planned')
+              : record?.stretch ? t('missionStretchDone') : record?.minimum ? t('missionMinimumDone')
+              : unlocked ? t('missionOpen') : t('unlockAfter', { mission: t(missionCatalog[index - 1].title) })}</small>
+            {unlocked && <button className="button secondary" onClick={() => open(id)}>{t('openMission')}</button>}
+          </li>
+        })}
+      </ol>
+    </section>
+    <Portfolio progress={progress} t={t} />
     <div className="lobby-links">
       {multiplayerAvailable ? <button className="lobby-team" onClick={team}>
         <span>{t('multiplayer')}</span><small>{t('teamSize')}</small><ArrowRight size={17} aria-hidden />
       </button> : <Disclosure label={t('multiplayer')} value={t('teamSize')}><p>{t('roomDisabled')}</p></Disclosure>}
-      <Disclosure label={t('availableMissions')} value={`${t('reputation')} · ${reputation(progress)}`}>
-        <dl className="fact-list">
-          {missionCatalog.slice(1).map(({ id, title }, index) => <div key={id} data-mission={id}>
-            <dt>{t(title)}</dt>
-            <dd>{!missions[id] ? t('planned') : isUnlocked(progress, id)
-              ? <button className="text-button" onClick={() => open(id)}>{t('briefAction')}</button>
-              : t('unlockAfter', { mission: t(missionCatalog[index].title) })}</dd>
-          </div>)}
-        </dl>
-      </Disclosure>
     </div>
   </>
 }
@@ -97,21 +122,22 @@ function App() {
 
   useEffect(() => { writeProgress(progress) }, [progress])
 
-  useEffect(() => { window.scrollTo(0, 0) }, [screen, game?.stage, game?.returned])
+  useEffect(() => { window.scrollTo(0, 0) }, [screen, game?.stage, game?.returned, game?.event, game?.flightProgress?.turn])
 
   function open(missionId: string) {
     setSelected(missionId)
     setScreen('brief')
   }
 
-  function begin() {
-    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: runSeed() })
+  function begin(commission?: CommissionId) {
+    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: runSeed(), commission })
     setScreen('single')
   }
 
-  function replay(sameSeed: boolean) {
+  function replay(sameSeed: boolean, goal?: ScienceGoal) {
     if (!game) return
-    dispatch({ type: 'new', missionId: game.missionId, records: game.records,
+    dispatch({ type: 'new', missionId: game.missionId, records: game.missionId === 'lunar-mission' && sameSeed
+      ? [...new Set([...game.records, ...lunarDiagnosticRecords(game)])] : game.records, scienceGoal: goal ?? game.scienceGoal, commission: game.commission,
       seed: sameSeed ? game.seed : crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000 })
     window.scrollTo(0, 0)
   }
@@ -134,8 +160,8 @@ function App() {
     <main className="shell">
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
       {screen === 'lobby' && <Lobby t={t} game={game} progress={progress} open={open} resume={() => setScreen('single')} team={() => setScreen('team')} />}
-      {screen === 'brief' && <Brief mission={missions[selected]} t={t} saved={Boolean(game)} back={back} begin={begin} />}
-      {screen === 'single' && game && <Single game={game} mission={missions[game.missionId]} send={dispatch} back={back} replay={replay} t={t} />}
+      {screen === 'brief' && <Brief key={selected} mission={selected === commissionMission.id ? commissionMission : missions[selected]} t={t} saved={Boolean(game)} back={back} begin={begin} />}
+      {screen === 'single' && game && <Single game={game} mission={game.commission ? commissionMission : missions[game.missionId]} progress={progress} send={dispatch} back={back} replay={replay} open={open} t={t} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
     </main>
   </>

@@ -1,6 +1,6 @@
 import type { Message } from '../i18n/en'
 import {
-  defectBelief, defectInFlight, drawFromPool, hasDefect, missionOdds, reviewRiskThreshold, untested,
+  defectBelief, defectInFlight, drawFromPool, hasDefect, itemRandom, missionOdds, reviewRiskThreshold, untested,
   type DefectState, type Maturity, type Severity,
 } from '../game/risk'
 
@@ -51,6 +51,10 @@ export const lunarMission = {
   downlinkWindows: 1,
   wakeWindows: 2,
   wakeCredits: 10,
+  lateOutageChance: 0.2,
+  returnedReserveForEfficiency: 20,
+  operatingAdvance: 12,
+  operatingReserve: { heritage: 3, new: 5 },
 
   payloads: {
     basic: { label: 'lunarPayloadBasic', description: 'lunarPayloadBasicDetail', massKg: 20, collectWindows: 2, maxBatches: 2, maturity: 'heritage', cost: 20 },
@@ -181,7 +185,7 @@ export const lunarMission = {
   storyEvents: [
     card('Camera', ['H27'], { Mount: { credits: 8, massKg: 2 }, Room: { credits: 3 }, Decline: {} }),
     card('Review', ['H32'], { UseSlot: { slots: -1 }, Note: {} }),
-    card('SecondOffer', ['H01', 'H14'], { Funding: { credits: 30 }, Tech: {}, Government: { credits: 30, massKg: 8 }, Alone: {} }),
+    card('SecondOffer', ['H01', 'H14'], { Funding: {}, Tech: {}, Government: { credits: 30, massKg: 8 }, Alone: {} }),
   ],
   secondOfferWeek: 8,
 
@@ -205,7 +209,7 @@ export const lunarMission = {
   ],
   cruiseCards: [
     card('Eclipse', ['H09', 'H27'], { Shelter: { windows: -1 }, Battery: { windows: -1 }, Exposed: {} }),
-    card('CruiseScience', ['H14'], { On: { credits: -4 }, Off: {} }),
+    card('CruiseScience', ['H14', 'H04'], { On: { credits: -4 }, Off: {} }),
   ],
   lossCards: [
     card('Imaging', ['H24'], { Share: {}, Decline: {} }),
@@ -237,6 +241,7 @@ export const lunarMission = {
     extra: { label: 'lunarSurfaceExtra', description: 'lunarSurfaceExtraDetail', reservedWindows: 0, deliverAll: true },
     diagnostics: { label: 'lunarSurfaceDiagnostics', description: 'lunarSurfaceDiagnosticsDetail', reservedWindows: 2, deliverAll: true },
   },
+  hostedPlan: { label: 'lunarSurfaceHosted', description: 'lunarSurfaceHostedDetail', reservedWindows: 1, deliverAll: true },
   nightPlans: {
     rest: { label: 'lunarNightRest', description: 'lunarNightRestDetail' },
     wake: { label: 'lunarNightWake', description: 'lunarNightWakeDetail' },
@@ -345,7 +350,7 @@ export type LunarDesign = {
 }
 export type LunarRisk = keyof typeof lunarMission.risks
 export type LunarStates = Record<LunarRisk, DefectState>
-export type LunarPlan = keyof typeof lunarMission.surfacePlans
+export type LunarPlan = keyof typeof lunarMission.surfacePlans | 'hosted'
 export type LunarOutcome = keyof typeof lunarMission.outcomes
 export type LunarClosing = keyof typeof lunarMission.closings
 
@@ -401,10 +406,10 @@ export function lunarSeverity(design: LunarDesign, id: LunarRisk, protectionOff 
   return lunarMission.risks[id].severity
 }
 
-export function lunarMass(design: LunarDesign, extraKg = 0, measured = true) {
+export function lunarMass(design: LunarDesign, extraKg = 0, measured = true, allocation: number = lunarMission.launchAllocationKg) {
   const dry = lunarMission.busDryKg + lunarMission.payloads[design.payload].massKg + lunarMission.sensors[design.sensor].massKg
     + lunarMission.powers[design.power].massKg + (measured ? lunarMission.mounts[design.mount].growthKg : 0) + extraKg
-  const loaded = lunarMission.launchAllocationKg - dry
+  const loaded = allocation - dry
   return { dry, loaded, margin: loaded - lunarMission.routes[design.route].propellantKg }
 }
 
@@ -417,6 +422,10 @@ export function lunarOdds(design: LunarDesign, states: LunarStates) {
   return missionOdds(lunarRisks(design, states).filter(item => item.id !== 'night'))
 }
 // Items the player has to sign for at flight review: believed above the threshold, which includes a known unfixed defect.
+export function lunarVerified(state: DefectState) {
+  return state.fixed || (!state.found && state.level >= lunarMission.checkedLevel)
+}
+
 export function lunarAcceptance(design: LunarDesign, states: LunarStates) {
   return lunarFlightRisks.filter(id => defectBelief(lunarMaturity(design, id), states[id]) > reviewRiskThreshold)
 }
@@ -443,6 +452,8 @@ export type LunarSetup = {
   states: LunarStates
   marginKg: number
   credits: number
+  revised?: boolean
+  responseReserves?: Partial<Record<LunarRisk, number>>
   secondPayload?: boolean
   icd?: 'reviewed' | 'open'
 }
@@ -451,13 +462,13 @@ export type LunarPick = (prompt: string, options: readonly string[], view: { spa
 export type LunarStep = { segment: string; prompt?: string; choice?: string; failed?: LunarRisk; spareKg: number; credits: number }
 
 // Seven-step flight. Nothing is rolled: card draws and every item's truth come from the seed, the rest is fixed rules.
-export type LunarFlightView = { spareKg: number; credits: number; windows: number }
+export type LunarFlightView = { spareKg: number; credits: number; windows: number; downlink: number; restartCost: number; more: number }
 export type LunarFlightUpdate =
   | { type: 'decision'; segment: string; prompt: string; options: readonly string[]; view: LunarFlightView }
   | { type: 'segment'; segment: string; view: LunarFlightView }
 
 export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFlightUpdate, LunarFlightResult, string | null> {
-  const { design, states } = setup
+  const { design, states, revised } = setup
   const cards = lunarFlightCards(seed)
   const payload = lunarMission.payloads[design.payload]
   const backup = lunarMission.sensors[design.sensor].backup
@@ -466,19 +477,35 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
   const flown: LunarRisk[] = []
   const steps: LunarStep[] = []
   let spareKg = setup.marginKg
-  let credits = setup.credits
+  const responseReserves = { ...setup.responseReserves }
+  let credits = setup.credits - Object.values(responseReserves).reduce((total, reserved) => total + reserved, 0)
+  const responseFunds = (id: LunarRisk) => credits + (responseReserves[id] ?? 0)
+  function payResponse(id: LunarRisk, cost: number) {
+    const reserved = Math.min(cost, responseReserves[id] ?? 0)
+    if (reserved) responseReserves[id] = responseReserves[id]! - reserved
+    credits -= cost - reserved
+  }
   let windows = 0
   let segment = 'launch'
   let protectionOff = false
   let cruiseData = false
   let payloadChecked = false
   let engineering = false
+  let secondPayloadUsable = false
+  let downlink: number = lunarMission.downlinkWindows
+  let more = 0
+  let reserveFailure: { need: number; margin: number } | undefined
+  const spends: LunarSurfaceSpend[] = []
+  function spend(source: LunarSurfaceSpend['source'], count: number) {
+    windows -= count
+    if (count) spends.push({ source, count })
+  }
   let correctionExtra = 0
   let nightWindows: number = lunarMission.powers[design.power].nightWindows
 
   const effect = (list: readonly { id: string; effect: Effect }[], id: string) => list.find(item => item.id === id)!.effect
   const apply = (change: Effect) => { credits += change.credits ?? 0; spareKg += change.propellantKg ?? 0; windows += change.windows ?? 0 }
-  const view = () => ({ spareKg, credits, windows })
+  const view = () => ({ spareKg, credits, windows, downlink, restartCost: payloadChecked ? 0 : 1, more })
   function* ask(prompt: string, options: readonly string[]): Generator<LunarFlightUpdate, string, string | null> {
     const choice = yield { type: 'decision', segment, prompt, options, view: view() }
     if (choice === null) throw new Error(`${prompt}: choice required`)
@@ -495,14 +522,18 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
     if (there && id !== 'night') failures.push(id)
     return there
   }
-  const checked = (id: LunarRisk) => !exposed.has(id) && (states[id].fixed || (!states[id].found && states[id].level >= lunarMission.checkedLevel))
-  const end = (outcome: LunarOutcome, critical: LunarRisk | 'reserve' | 'choice', batches = 0, upright = false): LunarFlightResult => {
+  const checked = (id: LunarRisk) => lunarVerified(states[id]) && (revised || !exposed.has(id))
+  // Surface window accounting for the debrief: windows after landing, windows left for science, windows per batch.
+  let surface: LunarSurfaceLedger | null = null
+  const end = (outcome: LunarOutcome, critical: LunarFlightResult['critical'], batches = 0, upright = false): LunarFlightResult => {
     let closing: LunarClosing
-    if (outcome === 'success' || outcome === 'extra') closing = failures.length ? 'recovered' : flown.filter(id => !checked(id)).length <= 1 ? 'checked' : 'unchecked'
-    else if (critical === 'choice') closing = 'tradeoff'
+    if (outcome === 'success' || outcome === 'extra') closing = failures.length ? 'recovered' : flown.filter(id => (!revised || id !== 'night') && !checked(id)).length <= 1 ? 'checked' : 'unchecked'
+    else if (critical === 'choice' || critical === 'windows') closing = 'tradeoff'
     else if (critical === 'reserve') closing = 'listed'
     else closing = checked(critical) ? 'missed' : 'listed'
-    return { outcome, closing, critical, upright, batches, segment, failures, flown, steps, spareKg, credits, cruiseData, engineering, protectionOff, secondPayloadUsable: Boolean(setup.secondPayload) && upright, cards, exposed: [...exposed] }
+    return { outcome, closing, critical, upright, batches, segment, failures, flown, steps, spareKg,
+      credits: credits + Object.values(responseReserves).reduce((total, reserved) => total + reserved, 0), cruiseData, engineering, protectionOff, secondPayloadUsable: revised ? secondPayloadUsable : Boolean(setup.secondPayload) && upright, cards, exposed: [...exposed], surface,
+      ...(reserveFailure && { reserveFailure }) }
   }
   const lost = (critical: LunarRisk | 'reserve') => end(cruiseData ? 'salvage' : 'lost', critical)
 
@@ -516,7 +547,7 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
     const choice = yield* ask('card:Weather', credits >= 6 ? ['Rollback', 'Slip'] : ['Slip'])
     if (choice === 'Slip') correctionExtra = 2; else apply(effect(launch.choices, choice))
   } else {
-    const choice = yield* ask('card:Lightning', states.software.level >= 3 && !states.software.found ? ['Check', 'Press', 'Switch'] : ['Check', 'Press'])
+    const choice = yield* ask('card:Lightning', states.software.level >= 3 && (!states.software.found || states.software.fixed) ? ['Check', 'Press', 'Switch'] : ['Check', 'Press'])
     if (choice === 'Press') exposed.add('software'); else apply(effect(launch.choices, choice))
   }
 
@@ -525,8 +556,8 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
   yield { type: 'segment', segment, view: view() }
   if (defect('software')) {
     const cost = setup.icd === 'reviewed' ? 0 : 6 + (setup.icd === 'open' ? lunarMission.uplinkOpenExtra : 0)
-    const choice = yield* ask('risk:software', credits >= cost ? ['Uplink', 'Wait', 'Disable'] : ['Wait', 'Disable'])
-    if (choice === 'Uplink') credits -= cost
+    const choice = yield* ask('risk:software', responseFunds('software') >= cost ? ['Uplink', 'Wait', 'Disable'] : ['Wait', 'Disable'])
+    if (choice === 'Uplink') payResponse('software', cost)
     else if (choice === 'Wait') apply(effect(lunarMission.responses.software, choice))
     else protectionOff = true
   }
@@ -536,15 +567,20 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
   yield { type: 'segment', segment, view: view() }
   if (cards.cruise === 'CruiseScience') {
     const choice = yield* ask('card:CruiseScience', credits >= 4 ? ['On', 'Off'] : ['Off'])
-    if (choice === 'On') { credits -= 4; cruiseData = true; payloadChecked = true }
+    if (choice === 'On') {
+      credits -= 4; cruiseData = true; payloadChecked = true
+      if (revised) exposed.add('payload')
+    }
   }
-  spareKg -= lunarMission.routes[design.route].correctionKg + correctionExtra
+  const correction = lunarMission.routes[design.route].correctionKg + correctionExtra
+  if (spareKg < correction) reserveFailure = { need: correction, margin: spareKg }
+  spareKg -= correction
   if (defect('pressure')) {
     spareKg -= lunarMission.pressureLossKg
     const choice = yield* ask('risk:pressure', spareKg >= 0 ? ['Emergency', 'Continue', 'Flyby', 'Diagnose'] : ['Emergency', 'Flyby', 'Diagnose'])
     if (choice === 'Emergency') { apply(effect(lunarMission.responses.pressure, choice)); exposed.add('descent') }
     else if (choice === 'Flyby') return end('salvage', 'pressure')
-    else if (choice === 'Diagnose') { engineering = true; return end('lost', 'pressure') }
+    else if (choice === 'Diagnose') { engineering = true; return lost('pressure') }
   }
 
   // 4 Lunar orbit insertion
@@ -553,9 +589,11 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
   if (spareKg < 0) return lost(failures.at(-1) ?? 'reserve')
   if (defect('thrusters')) {
     if (lunarSeverity(design, 'thrusters', protectionOff) === 'fatal') return lost('thrusters')
-    const choice = yield* ask('risk:thrusters', [...(credits >= 6 && spareKg >= 2 ? ['Simulate'] : []), ...(spareKg >= 6 ? ['Reverse'] : []), 'Flyby'])
+    const choice = yield* ask('risk:thrusters', [...(responseFunds('thrusters') >= 6 && spareKg >= 2 ? ['Simulate'] : []), ...(spareKg >= 6 ? ['Reverse'] : []), 'Flyby'])
     if (choice === 'Flyby') return end('salvage', 'thrusters')
-    apply(effect(lunarMission.responses.thrusters, choice))
+    const response = effect(lunarMission.responses.thrusters, choice)
+    if (response.credits) payResponse('thrusters', -response.credits)
+    apply({ ...response, credits: 0 })
   }
 
   // 5 Descent
@@ -564,64 +602,102 @@ export function* lunarFlight(seed: number, setup: LunarSetup): Generator<LunarFl
   let upright = true
   if (defect('descent')) {
     if (!backup) return lost('descent')
-    const choice = yield* ask('risk:descent', spareKg >= 3 ? ['Patch', 'Switch', 'Abort'] : ['Switch', 'Abort'])
+    const canPatch = spareKg >= 3 && (!revised || (lunarVerified(states.descent) && !exposed.has('descent')))
+    const choice = yield* ask('risk:descent', canPatch ? ['Patch', 'Switch', 'Abort'] : ['Switch', 'Abort'])
     if (choice === 'Abort') return end('salvage', 'descent')
     if (choice === 'Patch') { apply(effect(lunarMission.responses.descent, choice)); upright = states.descent.level >= lunarMission.checkedLevel && !exposed.has('descent') }
     else upright = false
   }
-  windows = upright ? lunarMission.daylightWindows : lunarMission.tiltedWindows
+  const daylight = upright ? lunarMission.daylightWindows : lunarMission.tiltedWindows
+  windows = daylight + (revised ? nightWindows : 0)
+  const landedWindows = windows
+  if (revised && !upright) spends.push({ source: 'tilt', count: lunarMission.daylightWindows - lunarMission.tiltedWindows })
 
   // 6 First lunar day
   segment = 'surface'
   yield { type: 'segment', segment, view: view() }
   if (cards.cruise === 'Eclipse') {
     const choice = yield* ask('card:Eclipse', nightWindows > 0 ? ['Shelter', 'Battery', 'Exposed'] : ['Shelter', 'Exposed'])
-    if (choice === 'Shelter') windows -= 1
-    else if (choice === 'Battery') nightWindows -= 1
-    else exposed.add('payload')
+    if (choice === 'Shelter') spend('eclipse', 1)
+    else if (choice === 'Battery') {
+      if (revised) spend('eclipse', 1)
+      else nightWindows -= 1
+    } else exposed.add('payload')
   }
-  windows += nightWindows
-  let downlink: number = lunarMission.downlinkWindows
+  if (!revised) windows += nightWindows
   if (defect('payload')) {
     const choice = yield* ask('risk:payload', ['Restart', 'LowRate', 'Engineering'])
-    if (choice === 'Restart') windows -= payloadChecked ? 0 : 1
-    else if (choice === 'LowRate') downlink += 1
-    else { engineering = true; return end('noData', 'payload', 0, upright) }
+    if (choice === 'Restart') spend('restart', payloadChecked ? 0 : 1)
+    else if (choice === 'LowRate') {
+      downlink += 1
+      spends.push({ source: 'lowRate', count: 1 })
+    }
+    else {
+      engineering = true
+      surface = { landed: landedWindows, usable: 0, each: payload.collectWindows + downlink,
+        ...(revised && { spends: [...spends, { source: 'diagnostics', count: windows }] }) }
+      return end('noData', 'payload', 0, upright)
+    }
   }
-  const plan = (yield* ask('plan', Object.keys(lunarMission.surfacePlans))) as LunarPlan
-  const reserved = lunarMission.surfacePlans[plan].reservedWindows
-  if (reserved) engineering = true
-  const usable = Math.max(0, windows - reserved)
+  const hosted = revised && Boolean(setup.secondPayload) && upright && lunarPlanBatches(design, 'hosted', windows, downlink).batches > 0
+  const canChoosePriority = lunarPlanBatches(design, 'extra', windows, downlink).batches > 1
+    || (lunarPlanBatches(design, 'extra', windows, downlink).batches > 0 && windows % (payload.collectWindows + downlink) === 0)
+  const plans = revised ? [...(canChoosePriority ? ['priority'] : []), 'extra',
+    ...(windows >= lunarMission.surfacePlans.diagnostics.reservedWindows ? ['diagnostics'] : []), ...(hosted ? ['hosted'] : [])]
+    : Object.keys(lunarMission.surfacePlans)
+  const plan = (yield* ask('plan', plans)) as LunarPlan
+  const reserved = surfacePlan(plan).reservedWindows
+  if (plan === 'diagnostics') engineering = true
+  if (plan === 'hosted') secondPayloadUsable = true
   const each = payload.collectWindows + downlink
-  const possible = Math.min(payload.maxBatches, Math.floor(usable / each))
-  let batches = lunarMission.surfacePlans[plan].deliverAll ? possible : Math.min(possible, lunarMission.minimumBatches)
+  const beforePlan = windows
+  if (reserved) spend(plan === 'hosted' ? 'hosted' : 'diagnostics', reserved)
+  if (revised && plan === 'extra' && canChoosePriority && itemRandom(seed, 'lunar:surface:late-drop') < lunarMission.lateOutageChance) spend('late', 1)
+  const usable = Math.max(0, windows)
+  surface = { landed: landedWindows, usable, each, ...(revised && { spends }) }
+  let batches = lunarPlanBatches(design, plan === 'hosted' || plan === 'diagnostics' ? 'extra' : plan, usable, downlink).batches
   let left = usable - batches * each
 
   // 7 Lunar night
   segment = 'night'
   yield { type: 'segment', segment, view: view() }
-  if (upright && credits >= lunarMission.wakeCredits && (yield* ask('night', ['rest', 'wake'])) === 'wake') {
+  more = Math.min(payload.maxBatches - batches, Math.floor((left + lunarMission.wakeWindows) / each))
+  if (upright && (!revised || (design.power === 'extended' && more > 0))
+    && credits >= lunarMission.wakeCredits && (yield* ask('night', ['rest', 'wake'])) === 'wake') {
     credits -= lunarMission.wakeCredits
     if (!defect('night')) {
       left += lunarMission.wakeWindows
-      const more = Math.min(payload.maxBatches - batches, Math.floor(left / each))
       batches += more
       left -= more * each
     }
   }
   if (batches === 0) {
-    const byChoice = reserved > 0 && Math.floor(windows / each) >= 1
-    return end('noData', byChoice ? 'choice' : !upright ? 'descent' : failures.at(-1) ?? 'choice', 0, upright)
+    const byChoice = plan === 'diagnostics' && Math.floor(beforePlan / each) >= 1
+    const cause = revised ? byChoice ? 'choice' : 'windows' : byChoice ? 'choice' : !upright ? 'descent' : failures.at(-1) ?? 'choice'
+    return end('noData', cause, 0, upright)
   }
-  const extra = batches >= lunarMission.stretchBatches || (Boolean(setup.secondPayload) && upright)
+  const extra = batches >= lunarMission.stretchBatches || (revised ? secondPayloadUsable : Boolean(setup.secondPayload) && upright)
   return end(extra ? 'extra' : 'success', 'choice', batches, upright)
 }
 
+export type LunarSurfaceSpend = { source: 'tilt' | 'eclipse' | 'restart' | 'lowRate' | 'diagnostics' | 'hosted' | 'late'; count: number }
+export type LunarSurfaceLedger = { landed: number; usable: number; each: number; spends?: LunarSurfaceSpend[] }
+export const surfacePlan = (plan: LunarPlan) => plan === 'hosted' ? lunarMission.hostedPlan : lunarMission.surfacePlans[plan]
+
+// How many batches a surface plan brings home with the windows left. The flight runs the same arithmetic.
+export function lunarPlanBatches(design: LunarDesign, plan: LunarPlan, windows: number, downlink: number = lunarMission.downlinkWindows) {
+  const payload = lunarMission.payloads[design.payload]
+  const each = payload.collectWindows + downlink
+  const possible = Math.min(payload.maxBatches, Math.floor(Math.max(0, windows - surfacePlan(plan).reservedWindows) / each))
+  return { each, batches: surfacePlan(plan).deliverAll ? possible : Math.min(possible, lunarMission.minimumBatches) }
+}
+
 export type LunarFlightResult = {
-  outcome: LunarOutcome; closing: LunarClosing; critical: LunarRisk | 'reserve' | 'choice'; upright: boolean
+  outcome: LunarOutcome; closing: LunarClosing; critical: LunarRisk | 'reserve' | 'choice' | 'windows'; upright: boolean
   batches: number; segment: string; failures: LunarRisk[]; flown: LunarRisk[]; steps: LunarStep[]; spareKg: number
   credits: number; cruiseData: boolean; engineering: boolean; protectionOff: boolean; secondPayloadUsable: boolean
-  cards: ReturnType<typeof lunarFlightCards>; exposed: LunarRisk[]
+  cards: ReturnType<typeof lunarFlightCards>; exposed: LunarRisk[]; surface: LunarSurfaceLedger | null
+  reserveFailure?: { need: number; margin: number }
 }
 
 export function flyLunar(seed: number, setup: LunarSetup, pick: LunarPick) {

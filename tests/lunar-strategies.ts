@@ -6,18 +6,18 @@ export function verifyPlan(run: Run, plan: readonly LunarRisk[], slotAt = -1) {
   plan.forEach((id, index) => {
     const s = run.get(); const level = s.states[id].level
     const cost = [3, 6, 10][level] ?? 99
-    if (s.stop || s.week >= s.due || (index !== slotAt && s.credits < cost)) return
-    if (run.verify(id, { slot: index === slotAt }) === 'found') { const t = run.get(); if (t.week < t.due && t.credits >= mission.fix.credits) run.fix(id) }
+    if (s.stop || s.week >= s.due - 2 || (index !== slotAt && s.credits < cost)) return
+    if (run.verify(id, { slot: index === slotAt }) === 'found') { const t = run.get(); if (t.week <= t.due - 2 && t.credits >= mission.fix.credits + mission.costs.retest.credits) run.fix(id) }
   })
 }
 const main = ['buildFlight', 'buildPayload', 'buildGround', 'integrate'] as const
 export const strategies: Record<string, (seed: number) => Run> = {
-  fundingVerify: seed => { const r = start(seed, 'funding'); r.work('assess').work('trade').design({ mount: 'lightweight' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'descent', 'payload', 'payload', 'software', 'software', 'pressure', 'pressure', 'thrusters', 'thrusters']); r.review({ waive: true }); return r },
+  fundingVerify: seed => { const r = start(seed, 'funding', { CostReview: 'Cut' }); r.work('assess').design({ mount: 'lightweight' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'descent', 'payload', 'payload', 'software', 'software', 'pressure', 'pressure', 'thrusters', 'thrusters']); r.review({ waive: true }); return r },
   techVerify: seed => { const r = start(seed, 'tech', { PartnerExit: 'Negotiate', Review: 'UseSlot' }); r.design({ route: 'lowEnergy' }).work('assess').work('prelim').work('contract').work('contract').work('contract').work('detail').work('freeze').work('buildFlight', { slot: true }).work('buildPayload').work('buildGround').work('integrate', { slot: true }); verifyPlan(r, ['descent', 'descent', 'descent', 'payload', 'payload', 'software', 'pressure', 'thrusters']); r.review({ waive: true }); return r },
   declineNone: seed => { const r = start(seed).design({ route: 'lowEnergy' }); r.work('assess').work('prelim').work('detail').work('freeze'); main.forEach(id => r.work(id)); r.review({ waive: true }); return r },
-  declineSome: seed => { const r = start(seed).design({ route: 'lowEnergy' }); r.work('assess').work('prelim').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'payload', 'payload']); r.review({ waive: true }); return r },
-  stretchNone: seed => { const r = start(seed, 'funding', { Camera: 'Mount', SecondPayload: 'Light' }); r.work('assess').work('trade').design({ payload: 'advanced', route: 'lowEnergy', mount: 'lightweight' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); r.review({ waive: true }); return r },
-  lidarVerify: seed => { const r = start(seed, 'funding'); r.work('assess').work('trade').design({ mount: 'lightweight', sensor: 'redundant', route: 'lowEnergy' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'software', 'software', 'pressure', 'pressure', 'thrusters', 'payload']); r.review({ waive: true }); return r },
+  declineSome: seed => { const r = start(seed).design({ route: 'lowEnergy' }); r.work('assess').work('prelim').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent']); r.review({ waive: true }); return r },
+  stretchNone: seed => { const r = start(seed, 'funding', { Camera: 'Mount', SecondPayload: 'Light' }); r.work('assess').design({ payload: 'advanced', route: 'lowEnergy', mount: 'lightweight' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); r.review({ waive: true }); return r },
+  lidarVerify: seed => { const r = start(seed, 'funding', { CostReview: 'Cut' }); r.work('assess').design({ mount: 'lightweight', sensor: 'redundant', route: 'lowEnergy' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'software', 'software', 'pressure', 'pressure', 'thrusters', 'payload']); r.review({ waive: true }); return r },
 }
 import type { LunarPick } from '../src/missions/lunar-mission'
 const prefer = (order: Record<string, string[]>): LunarPick => (prompt, options, view) => order[prompt]?.find(c => options.includes(c)) ?? cautious(prompt, options, view)
@@ -30,11 +30,17 @@ export const picks: Record<string, LunarPick> = {
   salvager: prefer({ 'risk:pressure': ['Flyby'], 'risk:thrusters': ['Flyby'], 'risk:descent': ['Abort'], 'risk:payload': ['Engineering'] }),
 }
 Object.assign(strategies, {
-  fundingSecond: (seed: number) => { const r = start(seed, 'funding', { SecondPayload: 'Light', IcdMismatch: 'Review', PartsAlert: 'Inspect' }); r.work('assess').work('trade').design({ mount: 'lightweight' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'payload', 'payload', 'software', 'software', 'pressure', 'pressure', 'thrusters', 'thrusters']); r.review({ waive: true }); return r },
+  fundingSecond: (seed: number) => { const r = start(seed, 'funding', { SecondPayload: 'Light', IcdMismatch: 'Review', PartsAlert: 'Inspect' }); r.work('assess').design({ mount: 'lightweight' }).work('prelim').work('contract').work('contract').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'payload', 'payload', 'software', 'software', 'pressure', 'pressure', 'thrusters', 'thrusters']); r.review({ waive: true }); return r },
   overspend: (seed: number) => { const r = start(seed).design({ payload: 'advanced', sensor: 'redundant', route: 'lowEnergy' }); r.work('assess').work('prelim').work('detail').work('freeze'); main.forEach(id => r.work(id)); r.review({ waive: true }); return r },
   standDown: (seed: number) => { const r = start(seed, 'decline', { CostReview: 'Stop' }).design({ payload: 'advanced', sensor: 'redundant', route: 'lowEnergy' }); r.work('assess').work('prelim').work('detail').work('freeze'); main.forEach(id => r.work(id)); r.review({ waive: true }); return r },
 })
-strategies.refuseToSign = seed => { const r = start(seed).design({ route: 'lowEnergy' }); r.work('assess').work('prelim').work('detail').work('freeze'); main.forEach(id => r.work(id)); verifyPlan(r, ['descent', 'descent', 'payload', 'payload']); if (!r.review({ accept: false }).passed) while (!r.get().stop) r.work('wait'); return r }
+strategies.refuseToSign = seed => {
+  const run = start(seed).design({ route: 'lowEnergy' }).work('assess').work('prelim').work('detail').work('freeze')
+  main.forEach(id => run.work(id))
+  run.review({ accept: false })
+  for (let week = run.get().week; week < run.get().due && !run.get().stop; week += 1) run.work('wait')
+  return run
+}
 
 // One line per run for the route tests and the route tables in docs/story/lunar-mission.md.
 export function summary(run: Run) {

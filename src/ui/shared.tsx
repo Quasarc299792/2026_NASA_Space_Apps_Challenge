@@ -48,7 +48,7 @@ export function optionValues({ params, cost, ...option }: DesignOption, mission:
 
 export function DesignSummary({ mission, design, t }: { mission: MissionRules; design: Design; t: Translate }) {
   return <dl className="fact-list">
-    {Object.entries(mission.groups).map(([key, group]) =>
+    {Object.entries(mission.groups).filter(([key, group]) => Object.hasOwn(group.options, design[key] ?? '')).map(([key, group]) =>
       <div key={key}><dt>{t(group.legend)}</dt><dd>{t(group.options[design[key]].label)}</dd></div>)}
   </dl>
 }

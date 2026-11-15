@@ -9,34 +9,54 @@ export const cubeSat = {
   title: 'cubesat',
   brief: 'briefStory',
   deadline: 6,
-  budget: 100,
+  budget: 110,
   dollarsPerCredit: 10_000,
   playMinutes: '3–5',
-  initialDesign: { payload: 'basic', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
-  reviewDesign: { payload: 'advanced', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
+  initialDesign: { launch: 'iss', payload: 'basic', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
+  // The team review starts after launch is booked on the rideshare, so every proposal fits its mass limit.
+  reviewDesign: { launch: 'rideshare', payload: 'advanced', supply: 'standard', schedule: 'overlap', radio: 'compliant' },
   minimumBatches: 2,
   stretchBatches: 4,
   missionOrbits: 1,
   diagnosticBatches: 4,
   busWatts: 2,
   downlinkWatts: 4,
-  groundCapacity: 5,
-  payloads: {
-    basic: { label: 'payloadBasic', description: 'payloadBasicDetail', watts: 3, batches: 2, cost: 14, maturity: 'heritage' },
-    advanced: { label: 'payloadAdvanced', description: 'payloadAdvancedDetail', watts: 7, batches: 5, cost: 21, maturity: 'new' },
+  // Mass of the 3U structure, computer, radio and attitude control. The camera and the power system add to it.
+  busKg: 2.4,
+  // Launch and orbit come as one booking. Every number here is a game setting, not a launch provider's figure.
+  // massLimitKg is the heaviest 3U the deployer accepts. passSlots is how many batches fit in the first ground pass:
+  // the higher orbit keeps the satellite above the station's horizon for longer. leadWeeks moves the delivery date earlier.
+  launches: {
+    iss: { label: 'launchIss', description: 'launchIssDetail', altitudeKm: 420, inclination: 51.6, lifetimeYears: 1, massLimitKg: 4, passSlots: 5, leadWeeks: 0, cost: 10 },
+    rideshare: { label: 'launchRideshare', description: 'launchRideshareDetail', altitudeKm: 550, inclination: 97.6, lifetimeYears: 5, massLimitKg: 6, passSlots: 6, leadWeeks: 1, cost: 16 },
   },
+  payloads: {
+    basic: { label: 'payloadBasic', description: 'payloadBasicDetail', watts: 3, massKg: 0.4, batches: 2, cost: 14, maturity: 'heritage' },
+    advanced: { label: 'payloadAdvanced', description: 'payloadAdvancedDetail', watts: 7, massKg: 0.8, batches: 5, cost: 21, maturity: 'new' },
+  },
+  // watts is the peak the solar panels and battery can deliver together, not the orbit-average power.
   supplies: {
-    standard: { label: 'powerStandard', description: 'powerStandardDetail', watts: 10, cost: 12, maturity: 'heritage' },
-    reinforced: { label: 'powerReinforced', description: 'powerReinforcedDetail', watts: 14, cost: 22, maturity: 'new' },
+    standard: { label: 'powerStandard', description: 'powerStandardDetail', watts: 10, massKg: 0.5, cost: 12, maturity: 'heritage' },
+    reinforced: { label: 'powerReinforced', description: 'powerReinforcedDetail', watts: 14, massKg: 1, cost: 22, maturity: 'new' },
   },
   schedules: {
     overlap: { label: 'scheduleOverlap', description: 'scheduleOverlapDetail', batchLoss: 0, params: { count: 0 } },
     stagger: { label: 'scheduleStagger', description: 'scheduleStaggerDetail', batchLoss: 2, params: { count: 2 } },
   },
+  // The first ground pass starts about 20 minutes after separation. A radio that waits longer misses the start of it.
+  firstPassMinutes: 20,
   radios: {
-    compliant: { label: 'radioCompliant', description: 'radioCompliantDetail', firstTxMinutes: 32, groundCapacity: 4, params: { minutes: 32, capacity: 4 } },
-    early: { label: 'radioEarly', description: 'radioEarlyDetail', firstTxMinutes: 20, groundCapacity: 5, params: { minutes: 20, capacity: 5 } },
+    compliant: { label: 'radioCompliant', description: 'radioCompliantDetail', firstTxMinutes: 32, missedSlots: 1, params: { minutes: 32, missed: 1 } },
+    early: { label: 'radioEarly', description: 'radioEarlyDetail', firstTxMinutes: 20, missedSlots: 0, params: { minutes: 20, missed: 0 } },
   },
+  sources: [
+    { source: 'NASA CubeSat 101 §6.9.1 (day-in-the-life test)', url: 'https://science.nasa.gov/wp-content/uploads/2023/06/nasa_csli_cubesat_101_508.pdf#page=68' },
+    { source: 'NASA CubeSat 101 §6.4 (mass properties)', url: 'https://science.nasa.gov/wp-content/uploads/2023/06/nasa_csli_cubesat_101_508.pdf#page=65' },
+    { source: 'NASA, Design and Develop Science Missions', url: 'https://www.nasa.gov/wp-content/uploads/2025/04/250323-design-and-develop-science-mission.pdf' },
+    { source: 'NASA Systems Engineering Handbook §5.3 Product Verification', url: 'https://www.nasa.gov/reference/5-3-product-verification/' },
+    { source: 'NASA Systems Engineering Handbook §6.4 Technical Risk Management', url: 'https://www.nasa.gov/reference/6-4-technical-risk-management/' },
+    { source: 'NASA NPR 7123.1D Appendix G (life-cycle reviews)', url: 'https://nodis3.gsfc.nasa.gov/displayDir.cfm?Internal_ID=N_PR_7123_001D_&page_name=AppendixG' },
+  ],
   ditl: {
     separationMinutes: 0,
     deployMinutes: 15,
@@ -83,6 +103,7 @@ export const proposals = {
 } as const satisfies Record<Department, { options: readonly string[]; fallback: string; brief: string }>
 
 export type CubeSatDesign = {
+  launch: keyof typeof cubeSat.launches
   payload: keyof typeof cubeSat.payloads
   supply: keyof typeof cubeSat.supplies
   schedule: keyof typeof cubeSat.schedules
@@ -117,17 +138,28 @@ export function scopeSegment(timeline: ReturnType<typeof powerTimeline>, focus: 
   return focus === 'imaging' ? timeline[0] : timeline[timeline.length - 1]
 }
 
+// Mass in tenths of a kilogram is summed as integers so 2.4 + 0.8 + 1 is exactly 4.2.
+export function spacecraftMass(design: CubeSatDesign) {
+  const tenths = [cubeSat.busKg, cubeSat.payloads[design.payload].massKg, cubeSat.supplies[design.supply].massKg]
+    .reduce((total, kg) => total + Math.round(kg * 10), 0)
+  return tenths / 10
+}
+
 export function forecast(design: CubeSatDesign) {
+  const launch = cubeSat.launches[design.launch]
   const payload = cubeSat.payloads[design.payload]
   const supply = cubeSat.supplies[design.supply]
   const schedule = cubeSat.schedules[design.schedule]
   const radio = cubeSat.radios[design.radio]
   const peak = Math.max(...powerTimeline(design).map(segment => segment.watts))
-  const capacity = Math.min(cubeSat.groundCapacity, radio.groundCapacity)
+  const capacity = Math.max(0, launch.passSlots - radio.missedSlots)
+  const collectedBatches = Math.max(0, payload.batches - schedule.batchLoss)
+  const mass = spacecraftMass(design)
   return {
     payloadWatts: payload.watts, peak, available: supply.watts, deficit: Math.max(0, peak - supply.watts),
-    contactCapacity: capacity,
-    batches: Math.max(0, Math.min(payload.batches - schedule.batchLoss, capacity)),
+    collectedBatches, contactCapacity: capacity,
+    batches: Math.min(collectedBatches, capacity),
+    mass, massLimit: launch.massLimitKg, massPass: mass <= launch.massLimitKg,
   }
 }
 
@@ -145,7 +177,8 @@ export function testDesign(design: CubeSatDesign) {
   const powerPass = designForecast.deficit === 0
   const ditlPass = ditl.elapsed >= ditl.threshold
   const dataPass = testedBatches >= cubeSat.minimumBatches
-  return { design, ...designForecast, ditl, testedBatches, powerPass, ditlPass, dataPass, checks: [powerPass, dataPass, ditlPass] }
+  const { massPass } = designForecast
+  return { design, ...designForecast, ditl, testedBatches, powerPass, ditlPass, dataPass, checks: [powerPass, dataPass, ditlPass, massPass] }
 }
 
 export type CubeSatEvidence = ReturnType<typeof testDesign> & { week?: number; revision?: number }
@@ -164,8 +197,10 @@ export function repairOptions(design: CubeSatDesign) {
   return remedies.filter(remedy => {
     if (remedy === 'compliant') return !estimate.ditlPass
     const changed = testDesign(applyRemedy(design, remedy))
+    if (!changed.massPass) return false
     return (changed.deficit < estimate.deficit && changed.dataPass)
       || (!estimate.dataPass && changed.dataPass && changed.powerPass)
+      || (!estimate.massPass && changed.dataPass && changed.powerPass)
   })
 }
 
@@ -277,7 +312,9 @@ export const cubeSatRules: MissionRules = {
   deadline: cubeSat.deadline,
   budget: cubeSat.budget,
   playMinutes: cubeSat.playMinutes,
+  effectiveDeadline: game => game.deadline - cubeSat.launches[(game.design as CubeSatDesign).launch].leadWeeks,
   groups: {
+    launch: { legend: 'launch', options: cubeSat.launches },
     payload: { legend: 'payload', options: cubeSat.payloads },
     supply: { legend: 'supply', options: cubeSat.supplies },
     schedule: { legend: 'schedule', options: cubeSat.schedules },
@@ -295,7 +332,7 @@ export const cubeSatRules: MissionRules = {
   records: game => game.flight?.delivered && game.evidence?.checks.every(Boolean) ? ['cubesat:partnerVerified'] : [],
   flightChoices,
   risks: cubeSatRisks,
-  configurationSteps: { feasibility: ['payload', 'supply'], design: ['schedule', 'radio'] },
+  configurationSteps: { feasibility: ['launch', 'payload', 'supply'], design: ['schedule', 'radio'] },
   labSteps: (game, kind) => kind === 'assembly' ? benchSequence(game.benchLead).length : powerTimeline(game.design as CubeSatDesign).length,
   contact: {
     plan: (evidence, choice) => planContact(evidence as CubeSatEvidence, choice),

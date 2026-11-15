@@ -82,9 +82,9 @@ test.describe('Firebase emulator', () => {
       await Promise.all([pm.reload(), guest.reload()])
       await expect(pm.getByRole('heading', { name: 'Integration passed' })).toBeVisible()
       await expect(guest.getByRole('heading', { name: '整合通過' })).toBeVisible()
-      await expect(guest.getByText('第 6 週・設計版本 1')).toBeHidden()
+      await expect(guest.getByText('第 6 週 · 設計版本 1')).toBeHidden()
       await guest.locator('summary').filter({ hasText: '整合驗證證據' }).click()
-      await expect(guest.getByText('第 6 週・設計版本 1')).toBeVisible()
+      await expect(guest.getByText('第 6 週 · 設計版本 1')).toBeVisible()
       expect(await guest.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
     } finally {
       await Promise.all([hostContext.close(), guestContext.close()])

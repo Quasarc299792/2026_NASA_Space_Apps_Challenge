@@ -1,5 +1,5 @@
 import type { Cost, Game, MissionRules, TimedJob } from './types'
-import { missionRules } from '../missions/rules'
+import { getMissionRules, missionRules } from '../missions/rules'
 
 const key = 'space-mission.single.v2'
 const stages = ['feasibility', 'design', 'build', 'integration', 'review', 'flight', 'results']
@@ -57,9 +57,14 @@ export function readGame(): Game | null {
   const raw = readLocal(key)
   if (!raw) return null
   try {
-    const game: Game | null = JSON.parse(raw)
-    if (!game) return null
-    const mission = Object.hasOwn(missionRules, game.missionId) ? missionRules[game.missionId] : undefined
+    const parsed: Game | null = JSON.parse(raw)
+    if (!parsed) return null
+    const mission = Object.hasOwn(missionRules, parsed.missionId) ? getMissionRules(parsed) : undefined
+    // Saves from before a design group existed take that group's initial option.
+    const fill = <T extends { design: Game['design'] } | null>(item: T) =>
+      item && typeof item === 'object' && item.design && typeof item.design === 'object' ? { ...item, design: { ...mission!.initialDesign, ...item.design } } : item
+    const game: Game = mission && parsed.design && typeof parsed.design === 'object'
+      ? { ...parsed, design: { ...mission.initialDesign, ...parsed.design }, evidence: fill(parsed.evidence), analysis: fill(parsed.analysis) } : parsed
     if (!mission || !stages.includes(game.stage) || !Array.isArray(game.log) || !Array.isArray(game.events) || !Array.isArray(game.records)
       || !Number.isInteger(game.deadline) || !Number.isInteger(game.week) || game.week < 0
       || !Number.isInteger(game.credits) || game.credits < 0

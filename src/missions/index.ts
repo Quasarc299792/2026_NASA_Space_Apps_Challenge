@@ -1,3 +1,5 @@
+import { commissionRules } from './cubesat-commission'
+import { commissionUi } from './cubesat-commission-ui'
 import type { ReactNode } from 'react'
 import type { Copy, Design, Evidence, FlightResult, Forecast, Game, MissionRules, TestResult } from '../game/types'
 import type { Message, Translate } from '../i18n'
@@ -18,12 +20,23 @@ export type MissionUi = {
   Delivery(props: { flight: FlightResult; t: Translate }): ReactNode
   Debrief?(props: { game: Game; t: Translate }): ReactNode
   Status?(props: { game: Game; t: Translate }): ReactNode
+  // A one-line forecast under the configuration, for the trade-off the chapter is about.
+  Preview?(props: { game: Game; t: Translate }): ReactNode
+  // NASA material the chapter's rules and numbers draw on, listed on the results page.
+  sources?: readonly { source: string; url: string }[]
+  // Work that counts as verification for the results rating.
+  verificationWork?: ReadonlySet<string>
+  knownDefectAtLaunch?(game: Game): boolean
+  TaskNote?(props: { game: Game; task: string; cost: { weeks: number; credits: number }; t: Translate }): ReactNode
+  optionalTasks?: ReadonlySet<string>
   outcome?(game: Game, t: Translate): { title: Message; detail?: Copy }
   flightOptions?(evidence: Evidence, t: Translate): FlightOption[]
   flightSummary(flight: FlightResult, t: Translate): string
 }
 
 export type MissionModule = MissionRules & { ui: MissionUi }
+
+export const commissionMission: MissionModule = { ...commissionRules, ui: commissionUi }
 
 export const cubeSatMission: MissionModule = { ...cubeSatRules, ui: cubeSatUi }
 
