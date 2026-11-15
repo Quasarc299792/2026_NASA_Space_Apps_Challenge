@@ -77,6 +77,12 @@ export function workCost(game: Game, work: Work): Cost {
   return { ...cost, credits: cost.credits + optionCost(mission, game.design) }
 }
 
+export function repairAndRetestCost(game: Game, remedy: string): Cost {
+  const repair = rulesFor(game).costs[remedy]
+  const retest = workCost(game, 'integrate')
+  return { weeks: repair.weeks + retest.weeks, credits: repair.credits + retest.credits }
+}
+
 function jobId(job: TimedJob) {
   if (job.type === 'work') return job.work
   if (job.type === 'repair') return job.remedy
@@ -387,6 +393,7 @@ export function runMission(game: Game, action: Action): Game {
       return action.turn === undefined || action.turn === game.log.length ? submitReview(game, action.waivers ?? []) : game
     case 'repair': {
       if (mission.tasks || !mission.applyRemedy || game.stage !== 'review' || !game.returned || !repairOptions(game).includes(action.remedy)) return game
+      if (!affordable(game, repairAndRetestCost(game, action.remedy))) return game
       return startWork(game, action, mission.costs[action.remedy])
     }
     case 'verify':

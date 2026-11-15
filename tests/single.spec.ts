@@ -305,12 +305,18 @@ test('the launch window closes when failed evidence is left unresolved', async (
   await button(page, labels.en.skip).click()
   await expect(page.getByText('First transmission was 20 minutes after separation. This ride requires at least 30 minutes.')).toBeVisible()
   await expect(page.getByRole('region', { name: 'Flight clearance' })).toContainText('20 minutes')
+  const correction = page.getByRole('radio', { name: /Restore the standard radio timer.*2 wk.*\$130,000/ })
+  await correction.check()
+  await expect(button(page, 'Apply selected correction')).toBeEnabled()
   await summary(page, 'Other actions').click()
   await button(page, 'Advance one week').click()
+  await expect(correction).toBeDisabled()
+  await expect(button(page, 'Apply selected correction')).toBeDisabled()
   await button(page, 'Advance one week').click()
   await expect(heading(page, 'No launch')).toBeVisible()
   await expect(page.getByText('The launch slot closed before flight approval.')).toBeVisible()
   await expect(page.getByText('No in-orbit result')).toBeVisible()
+  expect((await saved(page)).log.some(entry => entry.id === 'compliant')).toBe(false)
 })
 
 test('Traditional Chinese mobile play supports reduced motion, alternative bench order and diagnostics', async ({ page }) => {

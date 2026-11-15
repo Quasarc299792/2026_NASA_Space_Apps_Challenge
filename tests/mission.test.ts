@@ -44,6 +44,24 @@ test('DITL-only correction invalidates evidence and costs another integration te
   assert.equal(game.stage, 'flight')
 })
 
+test('a correction needs enough time and budget for both the repair and retest', () => {
+  const initial = newGame('cubesat')
+  const earlyRadio = runMission(initial, { type: 'configure', design: { ...initial.design, radio: 'early' } })
+  const returned = runMission(work(earlyRadio, 4), { type: 'review' })
+  const repair = { type: 'repair', remedy: 'compliant' } as const
+  const oneWeekLeft = runMission(returned, { type: 'wait' })
+  assert.equal(runMission(oneWeekLeft, repair), oneWeekLeft)
+
+  const oneCreditShort = { ...returned, credits: 12 }
+  assert.equal(runMission(oneCreditShort, repair), oneCreditShort)
+
+  const corrected = runMission({ ...returned, credits: 13 }, repair)
+  assert.equal(corrected.credits, 8, 'the retest is charged when performed')
+  const approved = runMission(work(corrected, 1), { type: 'review' })
+  assert.equal(approved.credits, 0)
+  assert.equal(approved.stage, 'flight')
+})
+
 test('team corrections use the same test, power tradeoffs and costs', () => {
   const stagger = resolveTeamReview('stagger')
   const upgraded = resolveTeamReview('reinforced')

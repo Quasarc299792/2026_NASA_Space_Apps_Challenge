@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fundingReduced, missionSpending, nextMission, type Progress } from '../game/progress'
 import {
   affordable, availableWeeks, baselineRemainingCost, canConfigure, contactEvidence, currentEvidence, currentFlightSegment, currentWork,
-  flightContext, optionCost, passes, pendingEvent, pendingReview, pendingWorkId, repairOptions, riskAcceptance, taskOptions,
+  flightContext, optionCost, passes, pendingEvent, pendingReview, pendingWorkId, repairAndRetestCost, repairOptions, riskAcceptance, taskOptions,
   sameDesign, workCost, type Action, type BenchLead, type ConfigStep, type ScienceGoal, type Copy, type DesignOption, type SegmentEntry,
   type MissionFile as File, type Entry, type Game, type TestFocus,
 } from '../game/mission'
@@ -624,25 +624,26 @@ function Results({ game, mission, progress, t, back, replay, open }: Props) {
 
 function Repair({ game, mission, t, send }: Controls) {
   const [choice, select] = useState<string | null>(null)
-  const retest = workCost(game, 'integrate')
-  const repairs = repairOptions(game)
+  const options = repairOptions(game).map(remedy => {
+    const total = repairAndRetestCost(game, remedy)
+    const fits = affordable(game, total)
+    return {
+      id: remedy,
+      name: mission.costs[remedy].label,
+      detail: t('repairAndRetest', { weeks: total.weeks, cost: missionMoney(mission, total.credits, t) }),
+      extra: <>
+        <small className={fits ? 'good' : 'bad'}>{t(fits ? 'repairFits' : 'noRepairTime')}</small>
+        <mission.ui.RemedyPreview design={game.design} remedy={remedy} t={t} />
+      </>,
+      disabled: !fits,
+    }
+  })
+  const selected = options.find(option => option.id === choice && !option.disabled)
   return <>
-    <Options legend="repairChoices" value={choice} choose={select} t={t} options={repairs.map(remedy => {
-      const correction = mission.costs[remedy]
-      const total = { weeks: correction.weeks + retest.weeks, credits: correction.credits + retest.credits }
-      return {
-        id: remedy,
-        name: correction.label,
-        detail: t('repairAndRetest', { weeks: total.weeks, cost: missionMoney(mission, total.credits, t) }),
-        extra: <>
-          <small className={affordable(game, total) ? 'good' : 'bad'}>{t(affordable(game, total) ? 'repairFits' : 'noRepairTime')}</small>
-          <mission.ui.RemedyPreview design={game.design} remedy={remedy} t={t} />
-        </>,
-        disabled: !affordable(game, correction),
-      }
-    })} />
-    <ActionButton disabled={!choice || !affordable(game, mission.costs[choice])}
-      onClick={() => choice && send({ type: 'repair', remedy: choice })}>{t('selectCorrection')}</ActionButton>
+    <Options legend="repairChoices" value={choice} choose={select} t={t} options={options} />
+    <ActionButton disabled={!selected} onClick={() => selected && send({ type: 'repair', remedy: selected.id })}>
+      {t('selectCorrection')}
+    </ActionButton>
   </>
 }
 
