@@ -70,7 +70,9 @@ export function commissionPlan(game: Game, design = game.design) {
     const cost = mainCost(game, id, design)
     return { weeks: total.weeks + cost.weeks, credits: total.credits + cost.credits }
   }, { weeks: 0, credits: 0 })
-  return { ...forecast, weeks: work.weeks, credits: work.credits, spareWeeks: forecast.deadline - game.week - work.weeks,
+  const deliveryHigh = Math.min(forecast.required, forecast.capacity)
+  const deliveryLow = Math.min(deliveryHigh, forecast.required - Number(!capabilityFor(design).backup), forecast.capacity - 1)
+  return { ...forecast, deliveryLow, deliveryHigh, weeks: work.weeks, credits: work.credits, spareWeeks: forecast.deadline - game.week - work.weeks,
     spareCredits: game.credits - work.credits }
 }
 

@@ -117,6 +117,9 @@ export type Game = {
   pendingWork?: PendingWork
   missionState?: JsonObject
   flightProgress?: FlightProgress
+  studioWork?: { task: string; turn: number; startedAt: number; endsAt: number; review?: boolean }
+  studioLaunch?: { startedAt: number }
+  studioTutorial?: Stage[]
 }
 
 export type Action =

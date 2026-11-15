@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { pendingReview, taskOptions } from '../src/game/mission'
 import { believedRisk, hasDefect, reviewRiskThreshold } from '../src/game/risk'
+import { translator } from '../src/i18n'
 import { en } from '../src/i18n/en'
 import { zhTW } from '../src/i18n/zh-TW'
+import { lunarUi } from '../src/missions/chapter-ui'
 import {
   flyLunar, lunarAcceptance, lunarDevDeck, lunarFlightCards, lunarItemId, lunarMass, lunarMaturity, lunarMission as mission, lunarOdds,
   lunarProposals, lunarRiskIds, lunarSeverity, lunarUntested, type LunarDesign,
 } from '../src/missions/lunar-mission'
+import { lunarBudgetForecast } from '../src/missions/lunar-rules'
 import { cautious, start } from './lunar-run'
-import { picks, playRoute, strategies, summary } from './lunar-strategies'
+import { picks, playRoute, strategies, summary, verifyPlan } from './lunar-strategies'
 
 const seeds = Array.from({ length: 2000 }, (_, index) => index + 1)
 const basic: LunarDesign = { ...mission.initialDesign }
@@ -23,6 +28,43 @@ test('a fixed-seed independent run can deliver using the production workbench', 
   assert.equal(state.flight?.outcome, 'success')
   assert.equal(state.flight?.batches, 1)
   assert.ok(state.flight?.steps.some(step => step.prompt === 'plan'))
+})
+
+test('seed 5: the technical partnership forecast applies earned support and warns before a reserve shortfall', () => {
+  const partnership = () => start(5, 'tech', { PartnerExit: 'Negotiate', Review: 'UseSlot' })
+    .design({ route: 'lowEnergy' }).work('assess').work('prelim')
+  const run = partnership()
+  assert.equal(lunarBudgetForecast(run.snapshot()).savings, 0, 'slots are promised until delivery')
+  run.work('contract').work('contract').work('contract').design({ mount: 'lightweight' })
+  const supported = lunarBudgetForecast(run.snapshot())
+  const usedOnVerification = lunarBudgetForecast(run.snapshot(), { credits: 0, usesSupport: true })
+  assert.equal(supported.savings, 26)
+  assert.equal(usedOnVerification.savings, 16)
+  assert.equal(usedOnVerification.credits, supported.credits + 10)
+  assert.equal(usedOnVerification.weeks, supported.weeks + 1)
+
+  function integrate() {
+    return partnership().work('contract').work('contract').work('contract').work('detail').work('freeze')
+      .work('buildFlight', { slot: true }).work('buildPayload').work('buildGround').work('integrate', { slot: true })
+  }
+  const focused = integrate()
+  verifyPlan(focused, ['descent', 'descent'])
+  assert.ok(focused.review().passed)
+  assert.equal(focused.fly(cautious)?.batches, 1)
+
+  const extensive = integrate()
+  verifyPlan(extensive, ['descent', 'descent', 'descent', 'payload', 'payload', 'software', 'software'])
+  const game = extensive.snapshot()
+  const pressure = taskOptions(game).find(task => task.id === mission.risks.pressure.steps[0])!
+  assert.deepEqual(lunarBudgetForecast(game, { credits: pressure.cost.credits, usesSupport: false }), {
+    weeks: 1, credits: 10, savings: 0, reserve: 11, available: 13, shortfall: 8,
+  })
+  assert.match(renderToStaticMarkup(lunarUi.TaskNote!({ game, task: pressure.id, cost: pressure.cost, t: translator('zh-TW') })),
+    /驗證後會剩 13 點。必做工作需 10 點，按目前風險估計需留 11 點應變。 還差 8 點/)
+  extensive.verify('pressure')
+  extensive.review({ accept: false })
+  assert.equal(extensive.get().credits, 3)
+  assert.ok(pendingReview(extensive.snapshot())?.issues.some(issue => issue.detail.message === 'lunarRiskReserveShort'))
 })
 
 test('the books balance on every route: income minus spending is what is left, and the flight only spends', () => {

@@ -1,7 +1,7 @@
-import { availableWeeks, currentEvidence } from '../game/mission'
-import type { Design, Evidence, Game, TestResult } from '../game/types'
+import { availableWeeks } from '../game/mission'
+import type { Design, Game, TestResult } from '../game/types'
 import type { Translate } from '../i18n'
-import { ActionButton, CostLabel, money } from '../ui/shared'
+import { missionMoney } from '../ui/shared'
 import type { MissionUi } from './index'
 import { capabilityFor, commissionFor, commissionForecast, commissionPlan, commissionRepairs, commissionRules } from './cubesat-commission'
 import { cubeSat } from './cubesat'
@@ -9,6 +9,13 @@ import { cubeSat } from './cubesat'
 export function CommissionNote({ t }: { t: Translate }) {
   const source = cubeSat.sources[2]
   return <p className="action-note">{t('commissionUsageNote')} <a href={source.url + '#page=14'} target="_blank" rel="noreferrer">{source.source}</a></p>
+}
+
+const credits = (count: number, t: Translate) => missionMoney(commissionRules, count, t)
+
+export function deliveryEstimate(plan: ReturnType<typeof commissionPlan>, t: Translate) {
+  const { deliveryLow: low, deliveryHigh: high } = plan
+  return low === high ? t('dataBatches', { count: high }) : t('studioDeliveryRange', { low, high })
 }
 
 export function CommissionPlan({ game, t }: { game: Game; t: Translate }) {
@@ -21,37 +28,23 @@ export function CommissionPlan({ game, t }: { game: Game; t: Translate }) {
       <div className={plan.mass > plan.massLimit ? 'bad' : undefined}><dt>{t('planMassLabel')}</dt><dd>{t('massUse', { mass: plan.mass, limit: plan.massLimit })}</dd></div>
       <div><dt>{t('planPowerLabel')}</dt><dd>{t('powerUse', plan)}</dd></div>
       <div><dt>{t('commissionPassBudget')}</dt><dd>{t('commissionCapacity', plan)}</dd></div>
+      <div><dt>{t('studioDeliveryEstimate')}</dt><dd>{deliveryEstimate(plan, t)}</dd></div>
     </dl>
     <p className={plan.spareWeeks < 0 || plan.spareCredits < 0 ? 'warning' : 'action-note'}>{t('commissionPlanBudget', {
-      ...plan, cost: money(plan.credits), reserve: money(plan.spareCredits),
+      ...plan, cost: credits(plan.credits, t), reserve: credits(plan.spareCredits, t),
     })}</p>
     {plan.mass > plan.massLimit && <p className="warning">{t('massFinding', { mass: plan.mass, limit: plan.massLimit })}</p>}
     {kit.backup && <p>{t(game.commission === 'bay' ? 'commissionBayAuxEffect' : 'commissionAuxEffect', { instrument: t(commissionFor(game).auxiliary) })}</p>}
     {kit.backup && <p>{t('commissionRecoveryBudget', { weeks: commissionRules.costs.correctLate.weeks + commissionRules.costs.retest.weeks,
-      cost: money(commissionRules.costs.correctLate.credits + commissionRules.costs.retest.credits),
-      stripWeeks: commissionRules.costs.retest.weeks, stripCost: money(commissionRules.costs.strip.credits + commissionRules.costs.retest.credits) })}</p>}
+      cost: credits(commissionRules.costs.correctLate.credits + commissionRules.costs.retest.credits, t),
+      stripWeeks: commissionRules.costs.retest.weeks, stripCost: credits(commissionRules.costs.strip.credits + commissionRules.costs.retest.credits, t) })}</p>}
     {game.stage === 'design' && kit.backup && <p className="action-note">{t('commissionScreenNote')} <a href={source.url} target="_blank" rel="noreferrer">{source.source}</a></p>}
   </section>
 }
 
 export function CommissionOption({ game, design, t }: { game: Game; design: Design; t: Translate }) {
   const plan = commissionPlan(game, design)
-  return <small>{t('commissionOptionNumbers', { ...plan, cost: money(plan.credits) })}</small>
-}
-
-export function CommissionRepairs({ game, t, run }: { game: Game; t: Translate; run: (id: string) => void }) {
-  const repairs = commissionRepairs(game)
-  if (!repairs.length) return null
-  return <section className="decisions">
-    <h2>{t('repairChoices')}</h2>
-    {repairs.map(option => <div key={option.id}>
-      <ActionButton disabled={!option.fits} onClick={() => run(option.id)}>
-        {t(option.cost.label)} <CostLabel t={t} weeks={option.weeks} credits={option.credits} />
-      </ActionButton>
-      <p className="action-note">{t(option.id === 'strip' ? 'commissionStripDetail' : 'commissionCorrectDetail')}</p>
-      {!option.fits && <p className="warning">{t('noRepairTime')}</p>}
-    </div>)}
-  </section>
+  return <small>{t('commissionOptionNumbers', { ...plan, cost: credits(plan.credits, t) })} · {deliveryEstimate(plan, t)}</small>
 }
 
 function Report({ evidence, t }: { evidence: TestResult; t: Translate }) {
@@ -64,13 +57,6 @@ function Report({ evidence, t }: { evidence: TestResult; t: Translate }) {
     </p>}
     <p className="action-note">{t('commissionDitlNote')} <a href={source.url} target="_blank" rel="noreferrer">{source.source}</a></p>
   </div>
-}
-
-export function CommissionReport({ game, t }: { game: Game; t: Translate }) {
-  const evidence = currentEvidence(game) as Evidence | null
-  return evidence && <section className="evidence-status">
-    <h2>{t('report')}</h2><Report evidence={evidence} t={t} />
-  </section>
 }
 
 export const commissionUi: MissionUi = {
@@ -104,11 +90,11 @@ export const commissionUi: MissionUi = {
         <p>{t('commissionArchive', { count: flight.archived })}</p>
         {commissionRules.records?.(game)?.length ? <p>{t('commissionLabReward')}</p> : null}
       </> : game.stop === 'deadline' || game.stop === 'funds' ? <>
-        <p>{t('commissionStopped', { week: game.week + availableWeeks(game), weeks: availableWeeks(game), credits: money(game.credits) })}</p>
-        {repair.map(item => <p key={item.id}>{t(item.cost.label)} · {t('repairAndRetest', { weeks: item.weeks, cost: money(item.credits) })}</p>)}
+        <p>{t('commissionStopped', { week: game.week + availableWeeks(game), weeks: availableWeeks(game), credits: credits(game.credits, t) })}</p>
+        {repair.map(item => <p key={item.id}>{t(item.cost.label)} · {t('repairAndRetest', { weeks: item.weeks, cost: credits(item.credits, t) })}</p>)}
       </> : null}
       {decision?.detail && cost && <p>{t(decision.detail.message)} {t('commissionDecisionSpent', {
-        cost: money(decision.cost + (retest?.cost ?? 0)), weeks: cost.weeks + (retest ? commissionRules.costs.retest.weeks : 0),
+        cost: credits(decision.cost + (retest?.cost ?? 0), t), weeks: cost.weeks + (retest ? commissionRules.costs.retest.weeks : 0),
       })}</p>}
     </section>
   },

@@ -5,28 +5,32 @@ import '@fontsource-variable/inter'
 import '@fontsource-variable/bricolage-grotesque'
 import '@fontsource/ibm-plex-mono/400.css'
 import './style.css'
+import './studio.css'
+
 import spacecraft from './assets/cubesat-pixel.png'
-import { type Action, type Game, type ScienceGoal, newGame, runMission } from './game/mission'
+import { type Game, type ScienceGoal, newGame } from './game/mission'
+import { runStudioSession, type StudioAction } from './game/studio-session'
 import { readGame, readLocal, writeGame, writeLocal } from './game/storage'
 import { languageKey, preferredLanguage, translator, type Language, type Translate } from './i18n'
 import { carriedRecords, completeMission, isUnlocked, readProgress, reputation, writeProgress, type Progress } from './game/progress'
 import { commissionMission, missionCatalog, missions } from './missions'
 import { lunarDiagnosticRecords } from './missions/lunar-rules'
 import type { CommissionId } from './missions/cubesat-commission'
-import { Brief, Single } from './ui/Single'
-import { Portfolio } from './ui/Story'
+import { Brief, clearDecisionDraft, Single } from './ui/Single'
+import { StudioScene } from './ui/StudioScene'
+import { Portfolio, Prologue, prologueKey, prologueLength } from './ui/Story'
 import { ActionButton, Disclosure } from './ui/shared'
 import { activeRoomKey, multiplayerAvailable } from './multiplayer/config'
 
 const Team = lazy(() => import('./ui/Team'))
 
-type Screen = 'lobby' | 'brief' | 'single' | 'team'
-type SessionAction = Action | { type: 'new'; missionId: string; records: string[]; seed: number; scienceGoal?: ScienceGoal; commission?: CommissionId }
+type Screen = 'lobby' | 'prologue' | 'brief' | 'single' | 'team'
+type SessionAction = StudioAction | { type: 'new'; missionId: string; records: string[]; seed: number; scienceGoal?: ScienceGoal; commission?: CommissionId; tutorial?: boolean }
 
 function session(game: Game | null, action: SessionAction) {
-  if (action.type !== 'new') return game && runMission(game, action)
+  if (action.type !== 'new') return game && runStudioSession(game, action)
   const next = newGame(action.missionId, action.records, action.seed, action.commission)
-  return action.scienceGoal ? { ...next, scienceGoal: action.scienceGoal } : next
+  return { ...next, ...(action.scienceGoal && { scienceGoal: action.scienceGoal }), ...(action.tutorial && { studioTutorial: [] }) }
 }
 
 // Every run gets a seed. Add ?seed=123 to the address to replay a particular run.
@@ -45,8 +49,8 @@ function recommendedMission(progress: Progress) {
     ?? missionCatalog.at(-1)!
 }
 
-function Lobby({ t, game, progress, open, resume, team }: {
-  t: Translate; game: Game | null; progress: Progress; open: (missionId: string) => void; resume: () => void; team: () => void
+function Lobby({ t, game, progress, open, resume, team, firstStart }: {
+  t: Translate; game: Game | null; progress: Progress; open: (missionId: string) => void; resume: () => void; team: () => void; firstStart: boolean
 }) {
   const finished = game?.stage === 'results' && !game.playback
   const inProgress = game !== null && !finished
@@ -55,19 +59,18 @@ function Lobby({ t, game, progress, open, resume, team }: {
   return <>
     <section className="lobby">
       <div className="lobby-copy">
-        <p className="eyebrow">{t('challenge')}</p>
         <h1>{first ? t('heroTitle') : t(inProgress ? 'heroContinue' : 'heroNext', { mission: t(featured.title) })}</h1>
         <p className="lobby-intro">{t(heroDetails[featured.id as keyof typeof heroDetails] ?? 'heroDetail')}</p>
         <p className="lobby-duration">{t('duration', { minutes: missions[featured.id].playMinutes })} · {t('single')}</p>
         <div className="action-row">
-          <ActionButton onClick={inProgress ? resume : () => open(featured.id)}>{t(inProgress ? 'continue' : 'briefAction')}</ActionButton>
+          <ActionButton onClick={inProgress ? resume : () => open(featured.id)}>{t(inProgress ? 'continue' : firstStart ? 'startGame' : 'briefAction')}</ActionButton>
           {finished && <button className="text-button" onClick={resume}>{t('previousResults')}</button>}
         </div>
       </div>
-      <figure className="lobby-art">
+      {inProgress || !first ? <StudioScene missionId={featured.id} game={inProgress ? game : undefined} t={t} /> : <figure className="lobby-art">
         <img src={spacecraft} alt={t('lobbyArtAlt')} width={128} height={80} fetchPriority="high" />
         <figcaption>{t('lobbyArtCaption')}</figcaption>
-      </figure>
+      </figure>}
     </section>
     <section className="mission-cards" aria-labelledby="mission-list">
       <div className="mission-cards-head">
@@ -79,7 +82,8 @@ function Lobby({ t, game, progress, open, resume, team }: {
           const record = progress.missions[id]
           const unlocked = Boolean(missions[id]) && isUnlocked(progress, id)
           return <li key={id} data-mission={id} className={unlocked ? 'mission-card' : 'mission-card locked'}>
-            <span className="eyebrow">{t('missionNumber', { count: index + 1 })} · {t(difficulty[index] ?? 'difficultyHard')}</span>
+            <StudioScene missionId={id} t={t} thumbnail />
+            <small>{t(difficulty[index] ?? 'difficultyHard')}</small>
             <strong>{t(title)}</strong>
             <small>{t('duration', { minutes: missions[id]?.playMinutes ?? '?' })}</small>
             <small className={record?.minimum ? 'good' : undefined}>{!missions[id] ? t('planned')
@@ -104,6 +108,10 @@ function App() {
   const [screen, setScreen] = useState<Screen>(() => multiplayerAvailable && readLocal(activeRoomKey) ? 'team' : 'lobby')
   const [game, dispatch] = useReducer(session, null, readGame)
   const [progress, setProgress] = useState(readProgress)
+  const [prologue, setPrologue] = useState(() => {
+    const step = Number(readLocal(prologueKey))
+    return Number.isInteger(step) && step >= 0 && step <= prologueLength ? step : 0
+  })
   const [selected, setSelected] = useState(missionCatalog[0].id)
   const [saved, setSaved] = useState(true)
   const t = useMemo(() => translator(language), [language])
@@ -124,18 +132,34 @@ function App() {
 
   useEffect(() => { window.scrollTo(0, 0) }, [screen, game?.stage, game?.returned, game?.event, game?.flightProgress?.turn])
 
+  useEffect(() => {
+    if (screen !== 'single' || document.activeElement !== document.body) return
+    document.querySelector<HTMLElement>('.studio-handoff > h2, .studio-outcome h1')?.focus({ preventScroll: true })
+  }, [screen, game])
+
+  const firstStart = !game && !Object.keys(progress.missions).length && prologue < prologueLength
   function open(missionId: string) {
     setSelected(missionId)
-    setScreen('brief')
+    setScreen(firstStart && missionId === commissionMission.id ? 'prologue' : 'brief')
+  }
+
+  function advancePrologue() {
+    const next = prologue + 1
+    writeLocal(prologueKey, String(next))
+    setPrologue(next)
+    if (next === prologueLength) setScreen('brief')
   }
 
   function begin(commission?: CommissionId) {
-    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: runSeed(), commission })
+    clearDecisionDraft()
+    dispatch({ type: 'new', missionId: selected, records: carriedRecords(progress), seed: runSeed(), commission,
+      tutorial: Boolean(commission && !game && !Object.keys(progress.missions).length) })
     setScreen('single')
   }
 
   function replay(sameSeed: boolean, goal?: ScienceGoal) {
     if (!game) return
+    clearDecisionDraft()
     dispatch({ type: 'new', missionId: game.missionId, records: game.missionId === 'lunar-mission' && sameSeed
       ? [...new Set([...game.records, ...lunarDiagnosticRecords(game)])] : game.records, scienceGoal: goal ?? game.scienceGoal, commission: game.commission,
       seed: sameSeed ? game.seed : crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000 })
@@ -147,21 +171,24 @@ function App() {
     setScreen('lobby')
   }
 
+  const languageControls = <div className="language">
+    <button aria-pressed={language === 'en'} lang="en" onClick={() => setLanguage('en')}>EN</button>
+    <button aria-pressed={language === 'zh-TW'} lang="zh-TW" onClick={() => setLanguage('zh-TW')}>繁中</button>
+  </div>
+
   return <>
     <header className="topbar">
       <div className="topbar-inner">
         <button className="brand" onClick={back} aria-label={t('lobby')}><Orbit size={25} aria-hidden /><span>{t('app')}</span></button>
-        <div className="language">
-          <button aria-pressed={language === 'en'} lang="en" onClick={() => setLanguage('en')}>EN</button>
-          <button aria-pressed={language === 'zh-TW'} lang="zh-TW" onClick={() => setLanguage('zh-TW')}>繁中</button>
-        </div>
+        {languageControls}
       </div>
     </header>
     <main className="shell">
       {!saved && <p className="notice" role="status">{t('saveFailed')}</p>}
-      {screen === 'lobby' && <Lobby t={t} game={game} progress={progress} open={open} resume={() => setScreen('single')} team={() => setScreen('team')} />}
+      {screen === 'lobby' && <Lobby t={t} game={game} progress={progress} open={open} resume={() => setScreen('single')} team={() => setScreen('team')} firstStart={firstStart} />}
+      {screen === 'prologue' && <Prologue step={prologue} next={advancePrologue} back={back} t={t} />}
       {screen === 'brief' && <Brief key={selected} mission={selected === commissionMission.id ? commissionMission : missions[selected]} t={t} saved={Boolean(game)} back={back} begin={begin} />}
-      {screen === 'single' && game && <Single game={game} mission={game.commission ? commissionMission : missions[game.missionId]} progress={progress} send={dispatch} back={back} replay={replay} open={open} t={t} />}
+      {screen === 'single' && game && <Single game={game} mission={game.commission ? commissionMission : missions[game.missionId]} progress={progress} send={dispatch} back={back} replay={replay} open={open} t={t} languageControls={languageControls} />}
       {screen === 'team' && <Suspense fallback={<p role="status">{t('roomConnecting')}</p>}><Team t={t} back={back} /></Suspense>}
     </main>
   </>

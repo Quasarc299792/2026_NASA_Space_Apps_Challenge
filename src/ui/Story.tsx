@@ -1,9 +1,44 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { Game } from '../game/types'
 import type { Progress } from '../game/progress'
 import type { Message, Translate } from '../i18n'
 import { commissionMission, missionCatalog, missions } from '../missions'
 import { commissions } from '../missions/cubesat-commission'
-import { DesignSummary, Disclosure, missionMoney } from './shared'
+import { ActionButton, Back, DesignSummary, Disclosure, missionMoney } from './shared'
+import { StudioAnimationButton, StudioBubble, StudioScene } from './StudioScene'
+
+export const prologueKey = 'space-mission.prologue.v1'
+const prologueBeats = [
+  { speaker: 'comms', prop: 'data', control: 'warning', alert: true, line: 'prologueWarning' },
+  { speaker: 'power', prop: 'contract', control: 'released', alert: true, line: 'prologueRelease' },
+  { speaker: 'comms', prop: 'signal', launch: 'liftoff', line: 'prologueLiftoff' },
+  { speaker: 'comms', prop: 'signal', control: 'lost', alert: true, line: 'prologueSignalLost', after: 'prologueInvestigation' },
+  { speaker: 'power', prop: 'contract', line: 'prologueOffers' },
+] as const
+
+export const prologueLength = prologueBeats.length
+
+export function Prologue({ step, next, back, t }: { step: number; next: () => void; back: () => void; t: Translate }) {
+  const beat = prologueBeats[step]
+  const present = step === prologueLength - 1
+  const [paused, setPaused] = useState(false)
+  const heading = useRef<HTMLHeadingElement>(null)
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }) }, [step])
+  return <article className="studio-brief">
+    <header className="studio-top"><Back t={t} onClick={back} /><h1>{t('storyPrologue')}</h1></header>
+    <div className="studio-workspace">
+      <StudioScene missionId="cubesat" t={t} sequence={String(step)} speaker={beat.speaker} prop={beat.prop} paused={paused}
+        control={'control' in beat ? beat.control : undefined} launch={'launch' in beat ? beat.launch : undefined}
+        alert={'alert' in beat && beat.alert} animationControl={<StudioAnimationButton t={t} paused={paused} toggle={() => setPaused(value => !value)} />} />
+      <section className="studio-handoff">
+        <h2 ref={heading} tabIndex={-1}>{t(present ? 'prologuePresent' : 'prologuePast')}</h2>
+        <StudioBubble t={t} speaker={beat.speaker} prop={beat.prop}><p>{t(beat.line)}</p></StudioBubble>
+        {'after' in beat && <p>{t(beat.after)}</p>}
+        <ActionButton onClick={next}>{t(present ? 'prologueReadOffers' : 'nextStep')}</ActionButton>
+      </section>
+    </div>
+  </article>
+}
 
 const chapters = {
   cubesat: { title: 'storyFirstLight', opening: 'storyFirstOffer', complete: 'storyFirstComplete', short: 'storyFirstShort' },

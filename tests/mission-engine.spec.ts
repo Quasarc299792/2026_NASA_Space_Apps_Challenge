@@ -1,8 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
 import { fixtureMission } from './fixtures/mission-engine'
+import { button as studioButton, chooseLanguage, configure, enterMeeting, firstBrief, meeting, reveal, signReview, work as doWork } from './studio-controls'
 import type { Game } from '../src/game/types'
 
 const saved = (page: Page): Promise<Game> => page.evaluate(() => JSON.parse(localStorage.getItem('space-mission.single.v2')!))
+
+async function chooseEvent(page: Page, name: string) {
+  await enterMeeting(page)
+  await studioButton(page, name).click()
+}
 
 test('the shared workbench resumes an event and a flight segment from v2', async ({ page }) => {
   await page.route(/\/src\/missions\/(rules|index)\.ts(?:\?|$)/, async route => {
@@ -70,12 +76,13 @@ test('the shared workbench resumes an event and a flight segment from v2', async
 })
 
 test('three chapters carry earned records, resume paid work, and replay the lunar ending', async ({ page }) => {
-  test.setTimeout(60_000)
+  test.setTimeout(90_000)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   const button = (name: string | RegExp) => page.getByRole('button', { name, exact: typeof name === 'string' })
-  const heading = (name: string) => page.getByRole('heading', { name, exact: true })
+  const heading = (name: string) => page.getByRole('heading', { name, exact: true }).first()
   const radio = (name: RegExp) => page.getByRole('radio', { name })
   const summary = (name: string) => page.locator('summary').filter({ hasText: name })
-  const work = (name: RegExp) => button(name).click()
+  const work = (name: RegExp) => doWork(page, name)
   const progress = () => page.evaluate(() => JSON.parse(localStorage.getItem('space-mission.progress.v1')!))
   const chapter = (id: string) => page.locator(`[data-mission="${id}"]`)
   const start = async () => {
@@ -88,27 +95,28 @@ test('three chapters carry earned records, resume paid work, and replay the luna
     await start()
   }
   const signFrr = async () => {
-    for (const waiver of await page.getByRole('checkbox').all()) await waiver.check()
-    await button('Submit FRR').click()
+    await signReview(page, 'FRR')
     await expect(page.getByText(/^Flight readiness review approved\./).first()).toBeVisible()
   }
 
   await page.goto('/?seed=6')
   await expect(chapter('orbital-launch').getByRole('button')).toHaveCount(0)
   await expect(chapter('lunar-mission').getByRole('button')).toHaveCount(0)
-  await button('View mission brief').click()
+  await firstBrief(page)
+  await reveal(page, 'Mission reference')
   await expect(heading('First Light')).toBeVisible()
   await summary('Prologue · The lost signal').click()
   await expect(page.getByText(/Investigators never established the cause/)).toBeVisible()
-  await start()
-  await radio(/Add an auxiliary sensor/).check()
-  await work(/Complete feasibility/)
+  await button('Accept commission').click()
+  await configure(page, /^Observation capability/, /Add an auxiliary sensor/)
+  await work(/Confirm initial configuration/)
   await work(/Run early interface test/)
   await work(/Correct the interface drawing/)
   await work(/Freeze design/)
   await work(/Build and test subsystems/)
   await work(/Run integration tests/)
-  await button('Submit FRR').click()
+  await signReview(page, 'FRR')
+  await button('Go to mission control').click()
   await button('Run first ground pass').click()
   await radio(/Image the northern access road/).check()
   await button('Capture and downlink follow-up').click()
@@ -123,16 +131,21 @@ test('three chapters carry earned records, resume paid work, and replay the luna
 
   await open('orbital-launch', 4)
   await expect(heading('Borrowed lab session')).toBeVisible()
-  await button('繁中').click()
+  await chooseLanguage(page, '繁中')
   await expect(heading('實驗室借用時段')).toBeVisible()
-  await button('EN').click()
+  await chooseLanguage(page, 'EN')
   await button('Choose Borrowed lab session').click()
+  const hangar = page.locator('.studio-scene[data-scene="hangar"]')
+  await expect(hangar).toBeInViewport({ ratio: 1 })
+  await expect(button(/^Define the architecture/)).toBeInViewport({ ratio: 1 })
+  const hangarBox = (await hangar.boundingBox())!
+  const reportBox = (await page.locator('.studio-handoff').boundingBox())!
+  expect(hangarBox.width).toBeGreaterThan(reportBox.width)
   await work(/Define the architecture/)
   await work(/Complete the preliminary design/)
-  for (const waiver of await page.getByRole('checkbox').all()) await waiver.check()
-  await button('Submit PDR').click()
+  await signReview(page, 'PDR')
   await expect(heading('Second payment reduced')).toBeVisible()
-  await button('Choose Return to the workbench').click()
+  await chooseEvent(page, 'Choose Return to the workbench')
   await work(/^Freeze design/)
   await work(/^Build the upper stage/)
   await work(/^Build avionics/)
@@ -146,6 +159,7 @@ test('three chapters carry earned records, resume paid work, and replay the luna
   await button('Run this segment').click()
   await button('Run this segment').click()
   await expect(heading('Demonstration delivered')).toBeVisible()
+  await reveal(page, 'Engineering debrief')
   await expect(summary('Integration evidence')).toContainText('2 of 2 checks passed')
   await expect.poll(() => saved(page)).toMatchObject({
     seed: 4, week: 10, credits: 59, records: ['cubesat:partnerVerified'],
@@ -160,22 +174,24 @@ test('three chapters carry earned records, resume paid work, and replay the luna
 
   await open('lunar-mission', 1)
   const playLunar = async (checkReloads: boolean) => {
+    await enterMeeting(page)
+    await expect(meeting(page)).toBeVisible()
     await expect(heading('Partner offers')).toBeVisible()
-    await expect(page.getByText(/50 cr on signing · 10 cr on delivery/)).toBeVisible()
-    await expect(page.getByText(/support slots on delivery: 4/)).toBeVisible()
+    await expect(meeting(page).getByText(/50 cr on signing · 10 cr on delivery/)).toBeVisible()
+    await expect(meeting(page).getByText(/support slots on delivery: 4/)).toBeVisible()
     await button('Choose Funded partnership').click()
     await expect.poll(() => saved(page)).toMatchObject({ records: ['cubesat:partnerVerified', 'orbital:onTime', 'orbital:verified'],
       credits: 212, missionState: { contract: { kind: 'funding', milestone: 10 } } })
     await work(/Define the architecture/)
     await work(/Complete the preliminary design/)
-    await button('Submit PDR').click()
-    await radio(/Lightweight mount/).check()
+    await signReview(page, 'PDR')
+    await configure(page, /mount/i, /Lightweight mount/)
     await work(/^Do contract work/)
     await work(/^Do contract work/)
     await expect(heading('A supplier is late')).toBeVisible()
-    await button('Choose Wait for it').click()
+    await chooseEvent(page, 'Choose Wait for it')
     await expect(heading('The funder wants a camera on the lander')).toBeVisible()
-    await button('Choose Broadcast from mission control instead').click()
+    await chooseEvent(page, 'Choose Broadcast from mission control instead')
     await summary('Extra tests and design changes').click()
     await work(/^Simulate the descent trajectory/)
     await work(/^Complete the detailed design/)
@@ -184,21 +200,21 @@ test('three chapters carry earned records, resume paid work, and replay the luna
     const beforeBuild = await saved(page)
     await work(/^Build and test the lander/)
     await expect(heading('The government moves the announcement up')).toBeVisible()
-    await expect(page.getByText('Build and test the lander paused in week 10. Weeks remaining: 1.')).toBeVisible()
+    await expect(page.getByText('Build and test the lander paused in week 10. Weeks remaining: 1.').first()).toBeVisible()
     const paused = await saved(page)
     expect(paused.credits).toBe(beforeBuild.credits - 30)
     expect(paused.pendingWork).toMatchObject({ job: { task: 'buildFlight' }, remaining: 1, cost: { credits: 30 } })
     if (checkReloads) {
-      await button('繁中').click()
+      await chooseLanguage(page, '繁中')
       await expect(heading('政府把發表日提前')).toBeVisible()
-      await expect(page.getByText(/在第 10 週暫停，尚需 1 週/)).toBeVisible()
+      await expect(page.getByText(/在第 10 週暫停，尚需 1 週/).first()).toBeVisible()
       await page.reload()
       await button('繼續任務').click()
       await expect(heading('政府把發表日提前')).toBeVisible()
       expect(await saved(page)).toEqual(paused)
-      await button('EN').click()
+      await chooseLanguage(page, 'EN')
     }
-    await button('Choose Accept the earlier date').click()
+    await chooseEvent(page, 'Choose Accept the earlier date')
     const built = await saved(page)
     expect(built.pendingWork).toBeUndefined()
     expect(built.credits).toBe(paused.credits + 12)
@@ -208,7 +224,7 @@ test('three chapters carry earned records, resume paid work, and replay the luna
     await work(/^Set up the ground system/)
     await work(/^Integrate, weigh and test/)
     await expect(heading('The interface documents disagree')).toBeVisible()
-    await button('Choose Let each team fix its own tables').click()
+    await chooseEvent(page, 'Choose Let each team fix its own tables')
     await summary('Extra tests and design changes').click()
     for (const task of [
       /^Field-test the landing sensors/, /^Rehearse the descent timeline/,
@@ -216,11 +232,10 @@ test('three chapters carry earned records, resume paid work, and replay the luna
       /^Bench-test the flight software/, /^Analyze pressurization leak paths/,
     ]) await work(task)
     if (checkReloads) {
-      await button('繁中').click()
+      await chooseLanguage(page, '繁中')
       await expect(heading('飛行審查')).toBeVisible()
-      await expect(page.getByText('待簽署的風險與豁免')).toBeVisible()
       await expect(summary('整合驗證證據')).toContainText('通過 2／2 項測試')
-      await button('EN').click()
+      await chooseLanguage(page, 'EN')
     }
     await signFrr()
 
@@ -238,7 +253,7 @@ test('three chapters carry earned records, resume paid work, and replay the luna
       await page.reload()
       await button('Continue mission').click()
       await expect(heading('Surface operations and data return')).toBeVisible()
-      await expect(page.getByText('The payload keeps collecting through the eclipse, colder than it has ever been.')).toBeVisible()
+      await expect(page.getByText('The payload keeps collecting through the eclipse, colder than it has ever been.').first()).toBeVisible()
       await expect(button('Run this segment')).toBeDisabled()
       expect(await saved(page)).toEqual(surface)
     }
@@ -246,6 +261,7 @@ test('three chapters carry earned records, resume paid work, and replay the luna
     await button('Run this segment').click()
     await button('Run this segment').click()
     await expect(heading('Landed · mission delivered')).toBeVisible()
+    await reveal(page, 'Engineering debrief')
     await expect(page.getByText(/The surface science team received the spectra/)).toBeVisible()
     await expect(page.locator('main')).not.toContainText(/\{\w+\}/)
     const finished = await saved(page)
@@ -254,14 +270,14 @@ test('three chapters carry earned records, resume paid work, and replay the luna
   }
 
   const first = await playLunar(true)
-  await button('繁中').click()
+  await chooseLanguage(page, '繁中')
   await expect(heading('登月 · 完成基本委託')).toBeVisible()
   await expect(heading('終章・回到實驗室')).toBeVisible()
   await expect(page.getByText(/剛收到下一份提案/)).toBeVisible()
   await expect(page.getByText(/月面科學組收到光譜/)).toBeVisible()
   await expect(page.locator('main')).not.toContainText(/\{\w+\}/)
   await expect.poll(async () => (await progress()).missions['lunar-mission'].minimum).toBe(true)
-  await button('EN').click()
+  await chooseLanguage(page, 'EN')
   await button('Replay this seed').click()
   expect(await playLunar(false)).toEqual(first)
   await button('Return home').click()
@@ -273,6 +289,7 @@ test('three chapters carry earned records, resume paid work, and replay the luna
 })
 
 test('the orbital and lunar chapters unlock, finish and replay using the production workbench', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.addInitScript(() => {
     if (localStorage.getItem('space-mission.progress.v1')) return
     localStorage.setItem('space-mission.progress.v1', JSON.stringify({
@@ -281,7 +298,7 @@ test('the orbital and lunar chapters unlock, finish and replay using the product
   })
   await page.goto('/?seed=4')
   const button = (name: string | RegExp) => page.getByRole('button', { name })
-  const work = (name: RegExp) => button(name).click()
+  const work = (name: RegExp) => doWork(page, name)
   const openChapter = async (id: string) => {
     await page.locator(`[data-mission="${id}"]`).getByRole('button').click()
     await button('Start mission').click()
@@ -290,42 +307,39 @@ test('the orbital and lunar chapters unlock, finish and replay using the product
   await button('Choose Borrowed lab session').click()
   await work(/Assign the demonstration requirements|Define the architecture/)
   await work(/Complete the preliminary design/)
-  for (const waiver of await page.getByRole('checkbox').all()) await waiver.check()
-  await button('Submit PDR').click()
-  await button('Choose Return to the workbench').click()
+  await signReview(page, 'PDR')
+  await chooseEvent(page, 'Choose Return to the workbench')
   await work(/Freeze design/)
   await work(/^Build the upper stage/)
   await work(/^Build avionics/)
   await work(/Use the borrowed lab session for Integrate and test the payload interface/)
-  await page.getByRole('checkbox').check()
-  await button('Submit FRR').click()
+  await signReview(page, 'FRR')
   await button('Run this segment').click()
   await page.reload()
   await button('Continue mission').click()
   await button('Run this segment').click()
+  await reveal(page, 'Engineering debrief')
   await expect(page.getByText('Run seed: 4', { exact: false })).toBeVisible()
   await expect.poll(async () => (await saved(page)).flight?.delivered).toBe(true)
 
   await button('Return home').click()
   await page.goto('/?seed=1')
   await openChapter('lunar-mission')
-  await button('Choose Decline both offers').click()
-  await button('Route to the Moon').click()
-  await page.getByRole('radio', { name: /Low-energy transfer/ }).check()
+  await chooseEvent(page, 'Choose Decline both offers')
+  await configure(page, /^Route to the Moon/, /Low-energy transfer/)
   await work(/Define the architecture/)
   await work(/Complete the preliminary design/)
-  await button('Submit PDR').click()
+  await signReview(page, 'PDR')
   await work(/Complete the detailed design/)
   await work(/Freeze design/)
-  await button('Choose Wait for it').click()
+  await chooseEvent(page, 'Choose Wait for it')
   await work(/^Build and test the lander/)
-  await button('Choose Carry on alone').click()
+  await chooseEvent(page, 'Choose Carry on alone')
   await work(/^Build and test the payload/)
-  await button('Choose Accept the earlier date').click()
+  await chooseEvent(page, 'Choose Accept the earlier date')
   await work(/^Set up the ground system/)
   await work(/^Integrate, weigh and test/)
-  for (const check of await page.getByRole('checkbox').all()) await check.check()
-  await button('Submit FRR').click()
+  await signReview(page, 'FRR')
   await page.getByRole('radio', { name: /full check in parking orbit/i }).check()
   await button('Run this segment').click()
   await button('Run this segment').click()
@@ -344,5 +358,7 @@ test('the orbital and lunar chapters unlock, finish and replay using the product
   await expect(page.locator('main')).not.toContainText(/\{\w+\}/)
   await button('Replay this seed').click()
   await expect.poll(async () => (await saved(page)).seed).toBe(1)
+  await expect(button('Enter meeting')).toBeVisible()
+  await enterMeeting(page)
   await expect(button('Choose Decline both offers')).toBeVisible()
 })

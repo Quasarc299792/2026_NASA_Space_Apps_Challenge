@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ComponentPropsWithRef, ReactNode } from 'react'
 import { cubeSat } from '../missions/cubesat'
 import type { Design, DesignOption, MissionRules, TestResult } from '../game/types'
 import type { MissionModule } from '../missions'
@@ -12,10 +12,10 @@ export function money(credits: number) {
 }
 
 export function missionMoney(mission: MissionRules, credits: number, t: Translate) {
-  return mission.id === cubeSat.id ? money(credits) : t('credits', { count: credits })
+  return mission.id === cubeSat.id && !mission.tasks ? money(credits) : t('credits', { count: credits })
 }
 
-export function ActionButton({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
+export function ActionButton({ children, ...props }: ComponentPropsWithRef<'button'>) {
   return <button type="button" className="button primary" {...props}>{children}<ArrowRight size={17} aria-hidden /></button>
 }
 
@@ -23,10 +23,10 @@ export function Back({ t, onClick }: { t: Translate; onClick: () => void }) {
   return <button className="text-button back" onClick={onClick}><ArrowLeft size={16} aria-hidden />{t('back')}</button>
 }
 
-export function Heading({ eyebrow, title, children }: { eyebrow?: string; title: string; children?: ReactNode }) {
+export function Heading({ eyebrow, title, children, focusable = false }: { eyebrow?: string; title: string; children?: ReactNode; focusable?: boolean }) {
   return <header className="section-heading">
     {eyebrow && <span className="eyebrow">{eyebrow}</span>}
-    <h1>{title}</h1>
+    <h1 tabIndex={focusable ? -1 : undefined}>{title}</h1>
     {children && <p>{children}</p>}
   </header>
 }
@@ -42,8 +42,8 @@ export function CostLabel({ t, weeks, credits, mission }: { t: Translate; weeks:
   return <span className="cost">{t('weeks', { count: weeks })} · {mission ? missionMoney(mission, credits, t) : money(credits)}</span>
 }
 
-export function optionValues({ params, cost, ...option }: DesignOption, mission: MissionRules) {
-  return { ...option, ...params, ...(cost === undefined ? {} : { cost: mission.id === cubeSat.id ? money(cost) : cost }) }
+export function optionValues({ params, cost, ...option }: DesignOption, mission: MissionRules, t: Translate) {
+  return { ...option, ...params, ...(cost === undefined ? {} : { cost: mission.id === cubeSat.id ? missionMoney(mission, cost, t) : cost }) }
 }
 
 export function DesignSummary({ mission, design, t }: { mission: MissionRules; design: Design; t: Translate }) {

@@ -55,6 +55,7 @@ export function start(seed: number, partnership: Partnership = 'decline', policy
 
   settle()
   const run = {
+    snapshot: () => game,
     design(change: Partial<LunarDesign>) {
       const { mount: selected, ...architecture } = change
       mount = selected ?? mount

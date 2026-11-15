@@ -1,5 +1,6 @@
 import type { Cost, Game, MissionRules, TimedJob } from './types'
 import { getMissionRules, missionRules } from '../missions/rules'
+import { restoreStudioSession } from './studio-session'
 
 const key = 'space-mission.single.v2'
 const stages = ['feasibility', 'design', 'build', 'integration', 'review', 'flight', 'results']
@@ -74,7 +75,7 @@ export function readGame(): Game | null {
       || (game.event !== null && !mission.events?.some(event => event.id === game.event))
       || !validContinuation(game, mission) || mission.validSave?.(game) === false
       || !Object.entries(mission.groups).every(([group, { options }]) => Object.hasOwn(options, game.design?.[group]))) return null
-    return game
+    return restoreStudioSession(game)
   } catch {
     return null
   }

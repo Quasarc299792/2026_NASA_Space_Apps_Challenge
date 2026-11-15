@@ -112,15 +112,44 @@ function support(id: string, label: CostItem['label'], change: (cost: Cost) => C
 
 const production = ['buildFlight', 'buildPayload', 'buildGround'] as const
 const mainline = ['assess', 'prelim', 'detail', 'freeze', ...production, 'integrate'] as const
+const requiredSupport = {
+  buildFlight: mission.supportUses.buildFlight,
+  integrate: mission.supportUses.integrate,
+  freeze: mission.supportUses.mount,
+}
+
+function remainingLunarWork(game: Game) {
+  const pending = pendingWorkId(game)?.split(':').at(-1)
+  return mainline.filter(id => id !== pending && !completed(game, id))
+}
+
 export function lunarPlanCost(game: Game, design = game.design) {
   const state = lunarState(game)
-  const remaining = mainline.filter(id => !completed(game, id) && pendingWorkId(game)?.split(':').at(-1) !== id)
-  const jobs = remaining.reduce((sum, id) => ({
+  const jobs = remainingLunarWork(game).reduce((sum, id) => ({
     weeks: sum.weeks + costs[id].weeks + (id === 'buildFlight' ? state.delay : 0),
     credits: sum.credits + costs[id].credits + (id === 'freeze' ? optionCost(lunarRules, design) : 0),
   }), { weeks: Number(state.interfaceDue), credits: 0 })
   const retestDue = Boolean(game.evidence && !currentEvidence(game) && pendingWorkId(game) !== 'retest')
   return { weeks: jobs.weeks + (retestDue ? costs.retest.weeks : 0), credits: jobs.credits + (retestDue ? costs.retest.credits : 0) }
+}
+
+export function lunarBudgetForecast(game: Game, verification?: { credits: number; usesSupport: boolean }) {
+  const plan = lunarPlanCost(game)
+  const remaining = remainingLunarWork(game)
+  const { contract, slots: earnedSlots } = lunarState(game)
+  const slots = Math.max(0, earnedSlots - Number(verification?.usesSupport ?? false))
+  const discounts = (Object.keys(requiredSupport) as (keyof typeof requiredSupport)[])
+    .filter(id => remaining.includes(id) && (id !== 'freeze' || lunarDesign(game).mount === 'lightweight'))
+    .map(id => requiredSupport[id])
+    .sort((a, b) => b.creditsSaved - a.creditsSaved)
+    .slice(0, slots)
+  const savings = discounts.reduce((sum, use) => sum + use.creditsSaved, 0)
+  const contractWeeks = contract && !contract.ended ? Math.max(0, contract.left - Number(pendingWorkId(game) === 'contract')) : 0
+  const weeks = plan.weeks + contractWeeks - discounts.reduce((sum, use) => sum + use.weeksSaved, 0)
+  const credits = plan.credits - savings
+  const reserve = lunarFlightRevised(game) ? Object.values(lunarResponseReserves(game)).reduce((sum, amount) => sum + amount, 0) : 0
+  const available = game.credits - (verification?.credits ?? 0)
+  return { weeks, credits, savings, reserve, available, shortfall: Math.max(0, credits + reserve - available) }
 }
 
 task('assess', game => game.stage === 'feasibility', game => ({ ...game, stage: 'design', gate: 'PDR' }), () => ({ message: 'lunarMdrPass' }))
@@ -168,10 +197,11 @@ for (const kind of ['funding', 'tech'] as const) {
     game => sign(game, kind, false))
 }
 
-support('buildFlight', mission.supportUses.buildFlight.label, cost => ({ weeks: cost.weeks - 1, credits: cost.credits - 10 }))
-support('integrate', mission.supportUses.integrate.label, cost => ({ weeks: cost.weeks - 1, credits: cost.credits - 10 }))
-support('freeze', mission.supportUses.mount.label, cost => ({ ...cost, credits: cost.credits - mission.mounts.lightweight.cost }),
-  game => lunarDesign(game).mount === 'lightweight')
+for (const id of ['buildFlight', 'integrate', 'freeze'] as const) {
+  const { label, weeksSaved, creditsSaved } = requiredSupport[id]
+  support(id, label, cost => ({ weeks: cost.weeks - weeksSaved, credits: cost.credits - creditsSaved }),
+    game => id !== 'freeze' || lunarDesign(game).mount === 'lightweight')
+}
 
 function verificationReady(game: Game, id: LunarRisk) {
   const state = lunarStates(game)[id]
@@ -226,14 +256,21 @@ const remedies = {
   basicPayload: (d: LunarDesign) => d.payload === 'advanced' ? { ...d, payload: 'basic' as const } : null,
   addLidar: (d: LunarDesign) => d.sensor === 'single' ? { ...d, sensor: 'redundant' as const } : null,
 }
+export function lunarCorrection(game: Game, id: string) {
+  if (!frozen(game) || !Object.hasOwn(remedies, id) || (id === 'partnerMount' && lunarState(game).slots <= 0)) return null
+  const design = remedies[id as keyof typeof remedies](lunarDesign(game))
+  if (!design) return null
+  const cost = costs[id]
+  const retest = game.evidence ? costs.retest : { weeks: 0, credits: 0 }
+  return { design, cost, retest, required: {
+    weeks: cost.weeks + retest.weeks + (id === 'reroute' ? mission.routes.lowEnergy.leadWeeks : 0),
+    credits: cost.credits + retest.credits,
+  } }
+}
 for (const [id, remedy] of Object.entries(remedies)) {
   task(id, game => {
-    const retest = game.evidence ? costs.retest : { weeks: 0, credits: 0 }
-    return frozen(game) && Boolean(remedy(lunarDesign(game))) &&
-      (id !== 'partnerMount' || lunarState(game).slots > 0) && affordable(game, {
-        weeks: costs[id].weeks + retest.weeks + (id === 'reroute' ? mission.routes.lowEnergy.leadWeeks : 0),
-        credits: costs[id].credits + retest.credits,
-      })
+    const correction = lunarCorrection(game, id)
+    return Boolean(correction && affordable(game, correction.required))
   }, game => redesign(id === 'partnerMount' ? set(game, { slots: lunarState(game).slots - 1 }) : game, remedy(lunarDesign(game))!))
 }
 
@@ -457,12 +494,15 @@ export const lunarRules: MissionRules = {
     { id: 'offers', title: 'lunarOfferTitle', detail: 'lunarOfferIntro', trigger: game => game.week === 0,
       choices: (['funding', 'tech', 'decline'] as const).map(id => ({
         id, label: mission.partnerships[id].label, detail: mission.partnerships[id].description,
-        values: game => ({
-          weeks: mission.partnerships[id].weeks, budget: game.credits,
-          advance: mission.partnerships[id].advance + (id === 'funding' && hasOrbitalRecord(game, 'onTime') ? 10 : 0),
-          milestone: mission.partnerships[id].milestone - (id === 'funding' && hasOrbitalRecord(game, 'onTime') ? 10 : 0),
-          slots: mission.partnerships[id].supportSlots + (id === 'tech' && hasOrbitalRecord(game, 'verified') ? 1 : 0),
-        }),
+        values: game => {
+          const { credits, reserve } = lunarBudgetForecast(game)
+          return {
+            weeks: mission.partnerships[id].weeks, budget: game.credits, cost: credits, reserve,
+            advance: mission.partnerships[id].advance + (id === 'funding' && hasOrbitalRecord(game, 'onTime') ? 10 : 0),
+            milestone: mission.partnerships[id].milestone - (id === 'funding' && hasOrbitalRecord(game, 'onTime') ? 10 : 0),
+            slots: mission.partnerships[id].supportSlots + (id === 'tech' && hasOrbitalRecord(game, 'verified') ? 1 : 0),
+          }
+        },
         apply: game => id === 'decline' ? game : sign(game, id, false),
       })) },
     ...mission.devCards.map(toEvent), ...mission.storyEvents.map(toEvent),

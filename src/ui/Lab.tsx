@@ -16,13 +16,44 @@ const segments = {
 
 const assemblyLabels = { science: 'labCalibrate', power: 'labConnect', comms: 'labBoot' } as const
 
+function LabCanvas({ art, loop = false }: { art: LabArt; loop?: boolean }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    const context = canvas.current?.getContext('2d')
+    if (!context) return
+    const motion = window.matchMedia(reducedMotion)
+    let frame = 0
+    let timer: number | undefined
+    const paint = () => {
+      window.clearInterval(timer)
+      frame = 0
+      drawLab(context, art, 0)
+      if (!motion.matches && (loop || art.receiving)) {
+        timer = window.setInterval(() => {
+          frame += 1
+          drawLab(context, art, frame % 4)
+          if (!loop && frame === 4) window.clearInterval(timer)
+        }, 230)
+      }
+    }
+    paint()
+    motion.addEventListener('change', paint)
+    return () => {
+      window.clearInterval(timer)
+      motion.removeEventListener('change', paint)
+    }
+  }, [art, loop])
+
+  return <canvas className="lab-art" ref={canvas} width={320} height={140} aria-hidden />
+}
+
 export function Lab({ game, send, t, compact = false }: {
   game: CubeSatGame; send: (action: Action) => void; t: Translate; compact?: boolean
 }) {
   const [department, inspect] = useState<Department | null>(null)
   const [expanded, setExpanded] = useState(false)
   const detailsId = useId()
-  const canvas = useRef<HTMLCanvasElement>(null)
   const { playback, design, stage, contact } = game
   const orbit = stage === 'flight'
   const assembly = playback?.kind === 'assembly'
@@ -55,35 +86,10 @@ export function Lab({ game, send, t, compact = false }: {
   }
   const readout = segment && t('powerUse', { peak: segment.watts, available })
   const art: LabArt = {
-    design, active, installed, assemblyStep, warning, orbit, comparing: department ?? undefined,
+    largeLens: design.payload === 'advanced', reinforcedPower: design.supply === 'reinforced',
+    active, installed, assemblyStep, warning, orbit, comparing: department ?? undefined,
     receiving: Boolean(receiving), received: contact?.next ?? 0,
   }
-
-  useEffect(() => {
-    const context = canvas.current?.getContext('2d')
-    if (!context) return
-    const motion = window.matchMedia(reducedMotion)
-    let frame = 0
-    let timer: number | undefined
-    const paint = () => {
-      window.clearInterval(timer)
-      frame = 0
-      drawLab(context, art, 0)
-      if (!motion.matches && (playback || receiving)) {
-        timer = window.setInterval(() => {
-          frame += 1
-          drawLab(context, art, frame % 4)
-          if (!playback && frame === 4) window.clearInterval(timer)
-        }, 230)
-      }
-    }
-    paint()
-    motion.addEventListener('change', paint)
-    return () => {
-      window.clearInterval(timer)
-      motion.removeEventListener('change', paint)
-    }
-  })
 
   useEffect(() => {
     if (!playback) return
@@ -127,7 +133,7 @@ export function Lab({ game, send, t, compact = false }: {
       </button>}
     </div>}
     <div className="lab-scene">
-      <canvas className="lab-art" ref={canvas} width={320} height={140} aria-hidden />
+      <LabCanvas art={art} loop={Boolean(playback)} />
       {tracked && <span className="lab-focus">{t(playback ? 'labScope' : 'labScopeSaved')}</span>}
     </div>
     <div id={detailsId} className="lab-details" hidden={compact && !expanded}>

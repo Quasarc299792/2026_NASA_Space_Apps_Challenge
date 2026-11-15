@@ -1,0 +1,117 @@
+import { expect, test, type Page } from '@playwright/test'
+import { translator, type Message } from '../src/i18n'
+import { commissionRules } from '../src/missions/cubesat-commission'
+import { lunarRules } from '../src/missions/lunar-rules'
+import { orbitalRules } from '../src/missions/orbital-rules'
+import type { Game } from '../src/game/types'
+import { activeDecision, button, configure, enterMeeting, firstBrief, meeting, reveal, work as doWork } from './studio-controls'
+
+const t = translator('zh-TW')
+const prefix = (label: string) => new RegExp('^' + label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+const persisted = (page: Page): Promise<Game> => page.evaluate(() => JSON.parse(localStorage.getItem('space-mission.single.v2')!))
+
+test('Traditional Chinese plays all three chapters, adjusts measured lift and restores a surface choice', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.goto('/?seed=1')
+  await button(page, '繁中').click()
+  const tap = (key: Message) => button(page, t(key)).click()
+  const scene = page.locator('.studio-scene')
+  const dialog = activeDecision(page)
+  const work = (key: Message) => doWork(page, prefix(t(key)), 'zh-TW')
+  const checkDesign = (group: Message, option: Message) => configure(page, prefix(t(group)), prefix(t(option)), 'zh-TW')
+  const event = async (choice: Message) => {
+    await enterMeeting(page, 'zh-TW')
+    await button(page, t('eventChoose') + ' ' + t(choice)).click()
+  }
+  const review = async (gate: 'PDR' | 'FRR') => {
+    const conditions = button(page, t('studioReview'))
+    if (await conditions.isVisible()) {
+      await conditions.click()
+      for (const waiver of await dialog.getByRole('checkbox').all()) await waiver.check()
+    }
+    await button(page, t('submitGate', { gate })).click()
+  }
+  const openChapter = async (missionId: string, seed: number) => {
+    await tap('home')
+    await page.goto('/?seed=' + seed)
+    await page.locator(`[data-mission="${missionId}"]`).getByRole('button', { name: t('openMission') }).click()
+    await tap('begin')
+  }
+
+  await firstBrief(page, 'zh-TW')
+  await tap('acceptCommission')
+  await enterMeeting(page, 'zh-TW')
+  await expect(scene).toBeInViewport({ ratio: 1 })
+  await expect(button(page, t('studioCompare'))).toBeInViewport({ ratio: 1 })
+  await tap('studioCompare')
+  await work('studioConfirmPlan')
+  for (const job of ['freeze', 'build', 'integrate']) await work(commissionRules.costs[job].label)
+  await review('FRR')
+  await tap('studioSkipLaunch')
+  await expect(scene).toHaveAttribute('data-scene', 'launchControl')
+  await tap('runFlight')
+  await expect(page.getByRole('heading', { name: t('commissionOutcomeSuccess') })).toBeVisible()
+
+  await openChapter('orbital-launch', 2)
+  await checkDesign('orbitalOrbit', 'orbitalOrbitSso')
+  await checkDesign('orbitalAdapter', 'orbitalAdapterLightweight')
+  await expect(scene).toHaveAttribute('data-scene', 'hangar')
+  await work(orbitalRules.costs.assess.label)
+  await work(orbitalRules.costs.prelim.label)
+  await review('PDR')
+  await event('orbitalEventAcknowledge')
+  for (const job of ['freeze', 'buildStage', 'buildAvionics', 'integrate']) await work(orbitalRules.costs[job].label)
+  await reveal(page, t('optionalTasks'))
+  for (const job of ['trade', 'engineTest', 'hotfire']) await work(orbitalRules.costs[job].label)
+  await expect(scene).toHaveAttribute('data-warning', 'true')
+  await review('FRR')
+  await enterMeeting(page, 'zh-TW')
+  await expect(meeting(page).getByText(/實測少送 6 kg.*運載餘裕 -2 kg/)).toBeVisible()
+  const measuredAt = (await persisted(page)).evidence?.week
+  await work(orbitalRules.costs.retarget.label)
+  await expect.poll(async () => (await persisted(page)).design.orbit).toBe('low')
+  expect((await persisted(page)).evidence?.week).toBe(measuredAt)
+  await review('FRR')
+  await expect(scene).toHaveAttribute('data-scene', 'ascent')
+  await tap('runSegment')
+  await expect(scene).toHaveAttribute('data-scene', 'orbitalPass')
+  await tap('runSegment')
+  await expect(page.getByRole('heading', { name: t('orbitalOutcomeSuccess') })).toBeVisible()
+
+  await openChapter('lunar-mission', 1)
+  await event('lunarOfferDecline')
+  await checkDesign('lunarRoute', 'lunarRouteLowEnergy')
+  await work(lunarRules.costs.assess.label)
+  await work(lunarRules.costs.prelim.label)
+  await review('PDR')
+  await work(lunarRules.costs.detail.label)
+  await work(lunarRules.costs.freeze.label)
+  await event('lunarCardSupplierDelayWait')
+  await work(lunarRules.costs.buildFlight.label)
+  await event('lunarCardSecondOfferAlone')
+  await work(lunarRules.costs.buildPayload.label)
+  await event('lunarCardPullInAccept')
+  await work(lunarRules.costs.buildGround.label)
+  await work(lunarRules.costs.integrate.label)
+  await review('FRR')
+  await dialog.getByRole('radio', { name: prefix(t('lunarCardLightningCheck')) }).check()
+  for (let i = 0; i < 5; i += 1) await tap('runSegment')
+  await expect(scene).toHaveAttribute('data-scene', 'surface')
+  await dialog.getByRole('radio', { name: prefix(t('lunarCardEclipseExposed')) }).check()
+  await tap('runSegment')
+  const plan = dialog.getByRole('radio', { name: prefix(t('lunarSurfaceExtra')) })
+  await plan.check()
+  const beforeReload = await persisted(page)
+  await page.reload()
+  await tap('continue')
+  await expect(plan).toBeChecked()
+  expect(await persisted(page)).toEqual(beforeReload)
+  await tap('runSegment')
+  await tap('runSegment')
+  await expect(page.getByRole('heading', { name: t('lunarOutcomeSuccess') })).toBeVisible()
+  await expect(scene).toHaveAttribute('data-result', 'delivered')
+  await expect.poll(async () => (await persisted(page)).flight?.batches).toBe(1)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+})

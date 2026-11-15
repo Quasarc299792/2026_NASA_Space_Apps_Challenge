@@ -7,8 +7,8 @@ import type { MissionUi } from './index'
 import { currentEvidence } from '../game/mission'
 import { approvedWeek, completed, nextDefectCopy, severityMessage } from './chapter'
 import { flyOrbital, orbitalCapacity, orbitalShortfall, orbitalCarried, orbitalDegradedCapacity, orbitalLaunch as orbital, orbitalLinkMaturity, orbitalNextStep, orbitalOdds, orbitalRiskIds, orbitalRisks, type OrbitalDesign } from './orbital-launch'
-import { orbitalPlanCost, orbitalRecords, orbitalRules, orbitalState } from './orbital-rules'
-import { lunarAllocation, lunarDesign, lunarDiagnosticRecords, lunarFlightRevised, lunarPlanCost, lunarRules, lunarState, lunarStates, massBudget } from './lunar-rules'
+import { orbitalPlan, orbitalRecords, orbitalRules, orbitalState } from './orbital-rules'
+import { lunarAllocation, lunarBudgetForecast, lunarDesign, lunarDiagnosticRecords, lunarFlightRevised, lunarPlanCost, lunarRules, lunarState, lunarStates, massBudget } from './lunar-rules'
 import { lunarItemId, lunarMaturity, lunarMission as lunar, lunarOdds, lunarPlanBatches, lunarRisks, lunarVerified, type LunarFlightResult } from './lunar-mission'
 
 // Frames a low forecast: it reflects what has been checked, not a verdict on the lander.
@@ -172,10 +172,15 @@ function LunarDebrief({ game, t }: { game: Game; t: Translate }) {
   </RiskResults>
 }
 
+const labUses = ['integrate', 'rehearse'] as const
+const labUseName = { integrate: 'orbitalLabIntegration', rehearse: 'orbitalLabRehearsal' } as const
+const labDeadline = orbital.labSlot.expiresWeek
+const canBookLab = (week: number | null) => week !== null && week < labDeadline
+
 function OrbitalPreview({ game, t }: { game: Game; t: Translate }) {
   const d = game.design as OrbitalDesign
   const { lift } = orbitalRisks(game.seed, d, orbitalState(game))
-  const cost = orbitalPlanCost(game)
+  const { credits: cost, lab } = orbitalPlan(game)
   const ground = orbital.grounds[d.ground]
   const source = orbital.sources.tradeSpace
   return <>
@@ -189,6 +194,17 @@ function OrbitalPreview({ game, t }: { game: Game; t: Translate }) {
     {cost > 0 && <p className={cost > game.credits ? 'warning' : 'action-note'}>
       {t(cost > game.credits ? 'orbitalFreezeBlocked' : 'orbitalEventCutEstimate', { cost, budget: game.credits })}
     </p>}
+    {orbitalState(game).lab && (game.week >= labDeadline
+      ? <p className="warning">{t('orbitalLabSlotExpired')}</p>
+      : <p className="action-note">{t('orbitalLabDeadline', { week: labDeadline })}{' '}
+        {labUses.map(use => {
+          const week = lab[use]
+          if (week === null) return null
+          return <span key={use}>{t(week < labDeadline ? 'orbitalLabEarliest' : 'orbitalLabTooLate', {
+            work: t(labUseName[use]), week,
+          })}{' '}</span>
+        })}
+      </p>)}
     {game.stage === 'design' && <p className="action-note">{t('orbitalTradeSource')} <a href={source.url} target="_blank" rel="noreferrer">{source.source}</a></p>}
     {(game.stage === 'build' || game.stage === 'integration') && d.stage === 'highMargin' &&
       <p className="action-note">{t('orbitalHotfireSource')} <a href={orbital.sources.hotfire.url} target="_blank" rel="noreferrer">{orbital.sources.hotfire.source}</a></p>}
@@ -197,13 +213,18 @@ function OrbitalPreview({ game, t }: { game: Game; t: Translate }) {
 
 function LunarPreview({ game, t }: { game: Game; t: Translate }) {
   const mass = massBudget(game)
-  const plan = lunarPlanCost(game)
+  const budget = lunarBudgetForecast(game)
   const d = lunarDesign(game)
   const route = lunar.routes[d.route]
   return <>
     <p className={mass.margin < lunar.reserveKg ? 'warning' : 'action-note'}>{t('lunarPreview', {
-      margin: mass.margin, reserve: lunar.reserveKg, dry: mass.dry, weeks: plan.weeks, credits: plan.credits,
+      margin: mass.margin, reserve: lunar.reserveKg, dry: mass.dry,
     })}</p>
+    <p className={budget.shortfall ? 'warning' : 'action-note'}>
+      {t('lunarBudgetForecast', budget)}{' '}
+      {budget.savings > 0 && <>{t('lunarBudgetSupport', budget)}{' '}</>}
+      {budget.shortfall > 0 && t('lunarBudgetShortfall', budget)}
+    </p>
     <p>{t('lunarRouteBudget', { correction: route.correctionKg, propellant: route.propellantKg,
       week: game.deadline - route.leadWeeks, allocation: lunarAllocation(game) })}</p>
     {(completed(game, 'trade') || completed(game, 'prelim')) && game.stage === 'design' && <>
@@ -217,32 +238,42 @@ function LunarPreview({ game, t }: { game: Game; t: Translate }) {
 const sourceList = (sources: Record<string, { source: string; url: string }>) =>
   Object.entries(sources).filter(([id]) => !/^H\d+$/.test(id)).map(([, item]) => item)
 
+const orbitalVerification = new Set<string>(orbitalRiskIds.flatMap(id => orbital.risks[id].steps))
+const lunarVerification = new Set<string>(Object.values(lunar.risks).flatMap(risk => risk.steps.flatMap(step => [step, `support:${step}`])))
+
 export const orbitalUi: MissionUi = {
   Preview: OrbitalPreview,
   TaskNote: ({ game, task, cost, t }) => {
     const remedy = orbital.remedies[task as keyof typeof orbital.remedies]
-    if (remedy) return <p className="action-note">{t(remedy.description, {
-      count: orbital.adapters.standard.massKg - orbital.adapters.lightweight.massKg,
-      mass: orbital.telemetry.diagnostics.massKg - orbital.telemetry.basic.massKg,
-      units: orbital.telemetry.diagnostics.diagnosticUnits,
-      from: orbital.grounds.single.capacity, to: orbital.grounds.dual.capacity,
-      lift: orbital.orbits.sso.capacityLossKg,
-    })}</p>
-    if (task.startsWith('lab:')) {
-      const use = task.slice(4) as keyof typeof orbital.labSlot.uses
-      const item = orbital.labSlot.uses[use]
-      return <p className="action-note">{t(item.label, { credits: item.creditsSaved })}</p>
-    }
-    if (Object.values(orbital.risks).some(risk => risk.steps.some(step => step === task)) && game.credits - cost.credits < orbitalPlanCost(game)) {
-      return <p className="warning">{t('orbitalVerifyStarves', { left: game.credits - cost.credits, cost: orbitalPlanCost(game) })}</p>
-    }
-    return null
+    const use = labUses.find(use => task === `lab:${use}`)
+    const before = orbitalPlan(game)
+    const after = orbitalPlan(game, game.design, { id: task, weeks: cost.weeks })
+    const left = game.credits - cost.credits
+    return <>
+      {remedy && <p className="action-note">{t(remedy.description, {
+        count: orbital.adapters.standard.massKg - orbital.adapters.lightweight.massKg,
+        mass: orbital.telemetry.diagnostics.massKg - orbital.telemetry.basic.massKg,
+        units: orbital.telemetry.diagnostics.diagnosticUnits,
+        from: orbital.grounds.single.capacity, to: orbital.grounds.dual.capacity,
+        lift: orbital.orbits.sso.capacityLossKg,
+      })}</p>}
+      {use && <p className="action-note">{t(orbital.labSlot.uses[use].label, { credits: orbital.labSlot.uses[use].creditsSaved })}</p>}
+      {labUses.map(use => {
+        const week = after.lab[use]
+        if (!canBookLab(before.lab[use]) || week === null || week < labDeadline) return null
+        return <p className="warning" key={use}>{t('orbitalLabMissedByWork', {
+          work: t(labUseName[use]), week, credits: orbital.labSlot.uses[use].creditsSaved,
+        })}</p>
+      })}
+      {(orbitalVerification.has(task) || task === 'lab:rehearse') && left < after.credits &&
+        <p className="warning">{t('orbitalVerifyStarves', { left, cost: after.credits })}</p>}
+    </>
   },
   knownDefectAtLaunch: game => orbitalState(game).link.found && !orbitalState(game).link.fixed,
   sources: sourceList(orbital.sources),
-  verificationWork: new Set(Object.values(orbital.risks).flatMap(risk => risk.steps)),
+  verificationWork: orbitalVerification,
   optionalTasks: new Set([
-    ...Object.values(orbital.risks).flatMap(risk => risk.steps), 'lab:rehearse', 'handover', ...Object.keys(orbital.remedies),
+    ...orbitalVerification, 'lab:rehearse', 'handover', ...Object.keys(orbital.remedies),
   ]),
   Requirements: ({ t }) => <>
     <p>{t('orbitalBriefMinimum', { payload: orbital.testPayloadKg, units: orbital.confirmationUnits })}</p>
@@ -268,7 +299,15 @@ export const orbitalUi: MissionUi = {
 export const lunarUi: MissionUi = {
   Preview: LunarPreview,
   knownDefectAtLaunch: game => Object.values(lunarStates(game)).some(state => state.found && !state.fixed),
-  TaskNote: ({ game, task, t }) => {
+  TaskNote: ({ game, task, cost, t }) => {
+    if (lunarVerification.has(task)) {
+      const budget = lunarBudgetForecast(game, { credits: cost.credits, usesSupport: task.startsWith('support:') })
+      return <p className={budget.shortfall ? 'warning' : 'action-note'}>
+        {t('lunarVerificationBudget', budget)}{' '}
+        {budget.savings > 0 && <>{t('lunarBudgetSupport', budget)}{' '}</>}
+        {budget.shortfall > 0 && t('lunarBudgetShortfall', budget)}
+      </p>
+    }
     const remedy = lunar.remedies[task as keyof typeof lunar.remedies]
     if (!remedy && !task.startsWith('fix:')) return null
     return <>
@@ -283,9 +322,9 @@ export const lunarUi: MissionUi = {
     </>
   },
   sources: sourceList(lunar.sources),
-  verificationWork: new Set(Object.values(lunar.risks).flatMap(risk => risk.steps.flatMap(step => [step, `support:${step}`]))),
+  verificationWork: lunarVerification,
   optionalTasks: new Set([
-    ...Object.values(lunar.risks).flatMap(risk => risk.steps.flatMap(step => [step, `support:${step}`])),
+    ...lunarVerification,
     'trade', ...Object.keys(lunar.remedies),
   ]),
   Requirements: ({ t }) => <>
@@ -296,9 +335,9 @@ export const lunarUi: MissionUi = {
   Status: ({ game, t }) => {
     const state = lunarState(game)
     const contract = state.contract
-    const plan = lunarPlanCost(game)
+    const budget = lunarBudgetForecast(game)
     return <>
-      {plan.weeks > 0 && <p>{t('chapterPlan', plan)}</p>}
+      {budget.credits > 0 && <p>{t('lunarBudgetForecast', budget)}</p>}
       {contract && !contract.ended && <p>{contract.left ? t('lunarContractProgress', { weeks: contract.weeks, done: contract.weeks - contract.left }) : t('lunarContractDelivered')}
         {' · '}{t('lunarSupportSlots', { count: state.slots })}</p>}
       {lunarEstimate(game, t)}

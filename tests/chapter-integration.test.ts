@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { currentEvidence, currentFlightSegment, flightContext, newGame, pendingEvent, pendingReview, runMission, type Game } from '../src/game/mission'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { currentEvidence, currentFlightSegment, flightContext, newGame, pendingEvent, pendingReview, runMission, taskOptions, type Game } from '../src/game/mission'
 import { completeMission, emptyProgress, isUnlocked } from '../src/game/progress'
-import { orbitalState } from '../src/missions/orbital-rules'
+import { translator } from '../src/i18n'
+import { orbitalUi } from '../src/missions/chapter-ui'
+import { orbitalPlan, orbitalState } from '../src/missions/orbital-rules'
 import { lunarState } from '../src/missions/lunar-rules'
 
 const decisions: Record<string, string> = {
@@ -73,6 +76,26 @@ test('orbital plays through the shared engine and unlocks lunar funding terms', 
   const lunar = choose(newGame('lunar-mission', progress.missions['orbital-launch'].records, 1), 'funding')
   assert.equal(lunar.credits, 212)
   assert.equal(lunarState(lunar).contract?.milestone, 10)
+})
+
+test('seed 4: a verification that delays integration to the lab deadline loses the discount', () => {
+  let game = events(newGame('orbital-launch', ['cubesat:partnerVerified'], 4))
+  assert.deepEqual(orbitalPlan(game).lab, { integrate: 6, rehearse: 6 })
+  game = review(tasks(game, ['assess', 'prelim']))
+  game = tasks(game, ['freeze', 'buildStage', 'buildAvionics', 'linkAnalysis', 'stationTest'])
+  assert.equal(game.week, 8)
+  const trade = taskOptions(game).find(task => task.id === 'trade')!
+  const preview = (at: Game) => orbitalPlan(at, at.design, { id: trade.id, weeks: trade.cost.weeks })
+  assert.deepEqual(preview(game), { credits: 0, lab: { integrate: 9, rehearse: 9 } })
+  assert.ok(taskOptions(task(game, 'trade')).some(task => task.id === 'lab:integrate'))
+
+  game = task(game, 'wait')
+  assert.deepEqual(preview(game), { credits: 12, lab: { integrate: 10, rehearse: 10 } })
+  assert.match(renderToStaticMarkup(orbitalUi.TaskNote!({ game, task: trade.id, cost: trade.cost, t: translator('zh-TW') })),
+    /整合測試最早要到第 10 週才能開始，會錯過這項借用可省的 12 點/)
+  const delayed = task(game, 'trade')
+  assert.equal(taskOptions(delayed).filter(task => task.id.startsWith('lab:')).length, 0)
+  assert.equal(taskOptions(delayed).find(task => task.id === 'integrate')?.cost.credits, preview(game).credits)
 })
 
 test('the sun-synchronous orbit costs lift capacity and pays the sponsor premium only after delivery', () => {

@@ -238,6 +238,7 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
 }
 .lab-skip:hover { text-decoration: underline; }
 .lab-art { width: 100%; height: auto; display: block; image-rendering: pixelated; background: #e4e2d9; }
+.lab-caption { border-top: 1px solid var(--lab-border); padding: 8px 12px; font-size: .75rem; }
 .lab-readout {
   min-height: 42px;
   border-top: 1px solid var(--lab-border);
@@ -401,6 +402,7 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
   flex-wrap: wrap;
 }
 .plan-preview { border: 1px solid var(--line); border-radius: 6px; }
+.plan-preview:has(> .forecast-metrics) { container-type: inline-size; }
 .forecast-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .forecast-metrics > div { padding: 9px 10px; }
 .forecast-metrics > div + div { border-left: 1px solid var(--line); }
@@ -496,7 +498,7 @@ blockquote { margin-bottom: 19px; border-left: 2px solid var(--line); padding: 3
 .glossary dt { font-weight: 680; margin-top: 8px; }
 .glossary dd { color: var(--muted); }
 
-@media (max-width: 600px) {
+@container (max-width: 480px) {
   .forecast-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .forecast-metrics > div:nth-child(3) { border-left: 0; }
   .forecast-metrics > div:nth-child(n + 3) { border-top: 1px solid var(--line); }

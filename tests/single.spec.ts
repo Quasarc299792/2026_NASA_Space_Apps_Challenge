@@ -460,5 +460,5 @@ test('a save from before seeded risk is dropped and the lobby offers a new missi
   })
   await page.reload()
   await expect(button(page, 'Continue mission')).toBeHidden()
-  await expect(button(page, labels.en.brief)).toBeVisible()
+  await expect(button(page, 'Begin game')).toBeVisible()
 })

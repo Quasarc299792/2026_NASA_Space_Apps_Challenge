@@ -47,16 +47,37 @@ const pdr = (game: Game): Copy => margin(game) < 0
 task('assess', game => game.stage === 'feasibility', game => ({ ...game, stage: 'design', gate: 'PDR' }), () => ({ message: 'orbitalMdrPass' }))
 task('prelim', game => game.stage === 'design' && !completed(game, 'prelim'), game => game)
 const production = mission.gates.FRR.work.filter(id => id !== 'integrate')
+const mainline = ['assess', 'prelim', 'freeze', ...production]
+
+export function orbitalPlan(game: Game, design: Design = game.design, after?: { id: string; weeks: number }) {
+  const pending = pendingWorkId(game)?.replace(/^lab:/, '')
+  const next = after?.id.replace(/^lab:/, '')
+  const unpaid = (id: string) => id !== pending && id !== next
+  const remaining = mainline.filter(id => unpaid(id) && !completed(game, id))
+  const integration = game.evidence ? 'retest' : 'integrate'
+  const needsIntegration = unpaid(integration) && (game.evidence ? !currentEvidence(game) : !completed(game, integration))
+  const week = game.week + (game.pendingWork?.remaining ?? 0) + (after?.weeks ?? 0)
+  const state = orbitalState(game)
+  const lab = { integrate: null as number | null, rehearse: null as number | null }
+  if (state.lab && !after?.id.startsWith('lab:')) {
+    if (needsIntegration && integration === 'integrate') {
+      lab.integrate = week + remaining.reduce((total, id) => total + costs[id].weeks, 0)
+    }
+    const link = state.link
+    if (!link.found && !link.fixed && link.level < topLevel && unpaid('rehearse')) {
+      const prerequisites = remaining.filter(id => id !== 'buildStage')
+        .concat(mission.risks.link.steps.slice(link.level, -1).filter(unpaid))
+      lab.rehearse = week + prerequisites.reduce((total, id) => total + costs[id].weeks, 0)
+    }
+  }
+  const savings = lab.integrate !== null && lab.integrate < mission.labSlot.expiresWeek ? mission.labSlot.uses.integrate.creditsSaved : 0
+  const credits = remaining.reduce((total, id) => total + costs[id].credits + (id === 'freeze' ? optionCost(orbitalRules, design) : 0), 0)
+    + (needsIntegration ? costs[integration].credits : 0) - savings
+  return { credits, lab }
+}
 
 export function orbitalPlanCost(game: Game, design: Design = game.design) {
-  const pending = pendingWorkId(game)?.replace(/^lab:/, '')
-  const remaining = ['assess', 'prelim', 'freeze', ...production, game.evidence ? 'retest' : 'integrate']
-    .filter(id => !completed(game, id) && pending !== id && !(id === 'retest' && currentEvidence(game)))
-  const earliestIntegration = game.week + (game.pendingWork?.remaining ?? 0)
-    + remaining.filter(id => id !== 'integrate').reduce((total, id) => total + costs[id].weeks, 0)
-  const lab = orbitalState(game).lab && earliestIntegration < mission.labSlot.expiresWeek
-  return remaining.reduce((total, id) => total + costs[id].credits + (id === 'freeze' ? optionCost(orbitalRules, design) : 0)
-    - (id === 'integrate' && lab ? mission.labSlot.uses.integrate.creditsSaved : 0), 0)
+  return orbitalPlan(game, design).credits
 }
 
 tasks.freeze = {
@@ -119,14 +140,19 @@ const remedies: Record<Remedy, (design: OrbitalDesign) => OrbitalDesign | null> 
   dropDiagnostics: design => design.telemetry === 'diagnostics' ? { ...design, telemetry: 'basic' } : null,
   dualStation: design => design.ground === 'single' ? { ...design, ground: 'dual' } : null,
 }
+export function orbitalCorrection(game: Game, id: string) {
+  const open = ['build', 'integration', 'review'].includes(game.stage) || (id === 'retarget' && game.stage === 'design')
+  if (!open || !Object.hasOwn(remedies, id)) return null
+  const design = remedies[id as Remedy](designOf(game))
+  if (!design) return null
+  const cost = costs[id]
+  const retest = game.evidence && id !== 'dualStation' && id !== 'retarget' ? costs.retest : { credits: 0, weeks: 0 }
+  return { design, cost, retest, required: { credits: cost.credits + retest.credits, weeks: cost.weeks + retest.weeks } }
+}
 for (const [id, remedy] of Object.entries(remedies)) {
   task(id, game => {
-    const open = game.stage === 'build' || game.stage === 'integration' || game.stage === 'review'
-      || (id === 'retarget' && game.stage === 'design')
-    const retest = game.evidence && id !== 'dualStation' && id !== 'retarget' ? costs.retest : { credits: 0, weeks: 0 }
-    return open && Boolean(remedy(designOf(game))) && affordable(game, {
-      credits: costs[id].credits + retest.credits, weeks: costs[id].weeks + retest.weeks,
-    })
+    const correction = orbitalCorrection(game, id)
+    return Boolean(correction && affordable(game, correction.required))
   }, game => {
     const design = remedy(designOf(game))!
     const next = configure(game, design)
